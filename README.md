@@ -1,36 +1,42 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# まごえほん(試作)
 
-## Getting Started
+おじいちゃん・おばあちゃんが、AIに手伝ってもらいながらお孫さんへの絵本をつくるWebアプリの試作です。
+出前ワークショップ(おしゃべり → AI生成 → 読み合わせ・手直し → 印刷)の流れに合わせています。
+端末の操作は高校生スタッフが代わりに行い、シニアの方は画面を一緒に見る想定です。
 
-First, run the development server:
+## 画面の流れ
+
+1. **おはなしメモ**: 主人公 / どんなおはなし / 最後に伝えたい言葉 / だれから・だれへ。🎤で声入力(Chrome・Safari)。絵のふんいきとページ数(12・16・20)を選ぶ。
+2. **AIがつくる**: 文章をまとめて作り、表紙と各ページの挿絵を順に描く。
+3. **よみあわせ・てなおし**: 1ページずつ大きく表示。「もっとやさしい色に」などの言葉で、そのページだけAIが直す。絵だけ描き直す・文章を手で書きかえるも可。
+4. **表紙と贈る言葉**: タイトル、だれから・だれへ、最後のページの言葉、表紙の絵。
+5. **印刷用データ**: 業者入稿用のPDFをダウンロード。
+
+作った絵本はその端末のブラウザ(IndexedDB)に保存され、ホーム画面から開き直せます。
+
+## 印刷用PDFの仕様
+
+- 仕上がり A5よこ 210×148mm、塗り足し各3mm(PDFのページは 216×154mm)。TrimBox / BleedBox を設定済み。
+- 文字は仕上がり線から10mm以上内側。
+- 構成: 表紙 → とびら(〇〇へ)→ おはなし 8/12/16ページ → メッセージ → うら表紙(奥付)= 計12/16/20ページ。
+- フォント: Zen Maru Gothic(SIL Open Font License)を埋め込み。挿絵は最大2600px幅のJPEG(A5よこで約300dpi)。
+
+## 動かし方
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env.local   # キーがあれば書く(なくても動く)
+npm run dev                  # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- `ANTHROPIC_API_KEY` がない → 文章は「おためしの文章」(メモの言葉をはめこんだひな形)。
+- `OPENAI_API_KEY` がない → 挿絵は「おためしの絵」(ブラウザで描くくまの絵)。
+- 画面右上に「おためし」と出ていれば、どちらかのキーが未設定です。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 技術構成
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Next.js(App Router)+ TypeScript。PC・タブレットのブラウザで動く。
+- 文章: Claude API(`src/lib/ai.ts`、構造化出力で タイトル・登場人物の見た目・各ページの文章と場面 を受け取る)
+- 挿絵: OpenAI 画像生成API(`src/lib/ai.ts` の `generateIllustration`。ほかの画像AIに差し替えやすいよう1関数にまとめている)
+- PDF: ブラウザ内で pdf-lib により作成(`src/lib/pdf.ts`)
+- APIキーはサーバー側(`src/app/api/*`)だけで使い、ブラウザには出さない。
