@@ -9,7 +9,12 @@ export type Memo = {
   from: string;
   /** 贈る相手(例: はるとくん) */
   to: string;
+  /** AIとのおしゃべりで出てきた思い出や好きなもの(物語に生かす) */
+  notes?: string;
 };
+
+export type ChatMessage = { role: "user" | "assistant"; text: string };
+export type ChatTurn = { reply: string; memo: Memo; ready: boolean };
 
 export type ArtStyle = "watercolor" | "crayon" | "pastel";
 

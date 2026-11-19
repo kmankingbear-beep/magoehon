@@ -7,12 +7,14 @@ import {
   type Book, type Memo, type ServerStatus, type StoryResult,
 } from "@/lib/types";
 import { useSpeech } from "./useSpeech";
+import ChatStep from "./ChatStep";
 import SheetEditor, { SheetCanvas } from "./SheetEditor";
 import { ensureDesigns } from "@/lib/design";
 
-type Step = "home" | "memo" | "generate" | "review" | "cover" | "print";
+type Step = "home" | "chat" | "memo" | "generate" | "review" | "cover" | "print";
 const STEPS: { id: Step; label: string }[] = [
-  { id: "memo", label: "おはなしメモ" },
+  { id: "chat", label: "AIとおしゃべり" },
+  { id: "memo", label: "絵本のしたく" },
   { id: "generate", label: "AIがつくる" },
   { id: "review", label: "かざりつけ" },
   { id: "cover", label: "表紙と言葉" },
@@ -25,6 +27,7 @@ export default function Studio() {
   const [step, setStep] = useState<Step>("home");
   const [book, setBook] = useState<Book | null>(null);
   const [status, setStatus] = useState<ServerStatus | null>(null);
+  const [chatMemo, setChatMemo] = useState<Memo | null>(null);
 
   useEffect(() => {
     fetch("/api/status").then((r) => r.json()).then(setStatus).catch(() => setStatus({ textAI: false, imageAI: false }));
@@ -53,13 +56,20 @@ export default function Studio() {
       <main className="main">
         {step === "home" && (
           <Home
-            onNew={() => { setBook(null); setStep("memo"); }}
+            onNew={() => { setBook(null); setChatMemo(null); setStep("chat"); }}
             onOpen={(b) => { setBook(ensureDesigns(b)); setStep("review"); }}
+          />
+        )}
+        {step === "chat" && (
+          <ChatStep
+            onDone={(m) => { setChatMemo(m); setStep("memo"); }}
+            onTypeInstead={(m) => { setChatMemo(m); setStep("memo"); }}
           />
         )}
         {step === "memo" && (
           <MemoStep
             initial={book}
+            initialMemo={chatMemo}
             onDone={(b) => { const nb = ensureDesigns(b); setBook(nb); void saveBook(nb); setStep("generate"); }}
           />
         )}
@@ -78,7 +88,7 @@ function Stepper({ step, onJump }: { step: Step; onJump?: (s: Step) => void }) {
     <ol className="stepper">
       {STEPS.map((s, i) => (
         <li key={s.id} className={i === idx ? "now" : i < idx ? "done" : ""}>
-          <button disabled={!onJump || s.id === "generate" || i > idx} onClick={() => onJump?.(s.id)}>
+          <button disabled={!onJump || s.id === "generate" || s.id === "chat" || i > idx} onClick={() => onJump?.(s.id)}>
             <span className="num">{i + 1}</span>
             {s.label}
           </button>
@@ -152,8 +162,8 @@ function VoiceField(props: {
   );
 }
 
-function MemoStep({ initial, onDone }: { initial: Book | null; onDone: (b: Book) => void }) {
-  const [memo, setMemo] = useState<Memo>(initial?.memo ?? EMPTY_MEMO);
+function MemoStep({ initial, initialMemo, onDone }: { initial: Book | null; initialMemo: Memo | null; onDone: (b: Book) => void }) {
+  const [memo, setMemo] = useState<Memo>({ ...EMPTY_MEMO, ...(initial?.memo ?? {}), ...(initialMemo ?? {}) });
   const [count, setCount] = useState(initial?.storyPageCount ?? 8);
   const [style, setStyle] = useState(initial?.style ?? ART_STYLES[0].id);
   const [busy, setBusy] = useState(false);
@@ -187,14 +197,17 @@ function MemoStep({ initial, onDone }: { initial: Book | null; onDone: (b: Book)
 
   return (
     <section className="card">
-      <h1>おはなしを きかせてください</h1>
-      <p className="lead">3つだけ教えてください。🎤 を押すと声で入力できます。</p>
+      <h1>{initialMemo ? "おはなしの まとめ" : "おはなしを きかせてください"}</h1>
+      <p className="lead">{initialMemo ? "AIが まとめました。ちがうところは なおせます。" : "3つだけ教えてください。🎤 を押すと声で入力できます。"}</p>
       <VoiceField label="① 主人公はだれ?" hint="お孫さんの名前や、好きな動物など" placeholder="例: はるとくんと、いぬのポチ"
         value={memo.hero} onChange={set("hero")} />
       <VoiceField label="② どんなおはなし?" hint="冒険、思い出、好きなことなど" placeholder="例: うみへ さかなを つりにいく"
         value={memo.adventure} onChange={set("adventure")} multiline />
       <VoiceField label="③ 最後に伝えたい言葉" hint="お孫さんへのメッセージ" placeholder="例: げんきに おおきくなってね"
         value={memo.message} onChange={set("message")} multiline />
+      {(memo.notes || initialMemo) && (
+        <VoiceField label="思い出・好きなもの" hint="物語の中に とりいれます" value={memo.notes ?? ""} onChange={set("notes")} multiline />
+      )}
       <div className="two">
         <VoiceField label="だれから?" hint="表紙にのります" placeholder="例: おばあちゃん" value={memo.from} onChange={set("from")} />
         <VoiceField label="だれへ?" hint="最初のページにのります" placeholder="例: はるとくん" value={memo.to} onChange={set("to")} />

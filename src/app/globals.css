@@ -232,3 +232,38 @@ button, input, textarea { font: inherit; color: inherit; }
   .editor-right .stamp { width: 60px; height: 60px; font-size: 1.8rem; }
 }
 .stage { max-width: 100%; }
+
+/* ---------- AIとおしゃべり ---------- */
+.chat-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+@media (min-width: 1000px) { .chat-grid { grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); align-items: start; } }
+.chat-main { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+.chat-log {
+  height: 52vh; min-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.8rem;
+  background: #fffaf2; border: 3px solid var(--line); border-radius: var(--radius); padding: 1rem;
+}
+.bubble-row { display: flex; gap: 0.6rem; align-items: flex-end; }
+.bubble-row.user { justify-content: flex-end; }
+.avatar { font-size: 2.4rem; line-height: 1; flex: none; }
+.bubble {
+  margin: 0; padding: 0.7rem 1.1rem; border-radius: 24px; max-width: 80%; font-size: 1.15rem; line-height: 1.6;
+  background: #fff; border: 3px solid var(--line); border-bottom-left-radius: 6px;
+}
+.bubble-row.user .bubble { background: var(--accent-soft); border-color: #f3c3a8; border-bottom-left-radius: 24px; border-bottom-right-radius: 6px; }
+.typing span { display: inline-block; animation: blink 1.2s infinite; color: var(--soft); margin: 0 0.1rem; }
+.typing span:nth-child(2) { animation-delay: 0.2s; }
+.typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 50% { opacity: 0.2; } }
+.chat-input { display: flex; flex-direction: column; gap: 0.6rem; }
+.btn.mic-huge {
+  min-height: 110px; font-size: 1.4rem; border-radius: 28px; background: #eef7ff; border-color: #8cc4ec;
+  box-shadow: 0 5px 0 #8cc4ec;
+}
+.btn.mic-huge.on { background: #ffe0e0; border-color: #e88; box-shadow: 0 5px 0 #e88; animation: pulse 1.2s infinite; }
+.chat-memo { background: #fffaf2; border: 3px dashed var(--line); border-radius: var(--radius); padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.chat-memo dl { margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.chat-memo dt { font-weight: 700; font-size: 0.8rem; color: var(--soft); }
+.chat-memo .got dt { color: var(--ok); }
+.chat-memo dd { margin: 0 0 0 1.2rem; font-size: 0.85rem; white-space: pre-wrap; }
+.btn.glow { animation: pulse 1.6s infinite; }
+.two > * { min-width: 0; }
+.two .btn.mic { min-width: 5rem; padding: 0.4rem 0.6rem; }

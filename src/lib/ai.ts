@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import type { Memo, StoryResult } from "./types";
+import type { ChatMessage, ChatTurn, Memo, StoryResult } from "./types";
 
 export const MODEL = "claude-opus-5-5";
 
@@ -69,7 +69,8 @@ export async function generateStory(memo: Memo, storyPageCount: number): Promise
 どんなおはなし: ${memo.adventure}
 最後に伝えたい言葉: ${memo.message}
 贈る人: ${memo.from}
-贈る相手: ${memo.to}`,
+贈る相手: ${memo.to}
+${memo.notes ? `\nおしゃべりで聞いた思い出や好きなもの(できるだけ物語に生かしてください):\n${memo.notes}` : ""}`,
   );
   return { ...story, pages: story.pages.slice(0, storyPageCount) };
 }
@@ -125,4 +126,64 @@ export async function generateIllustration(prompt: string): Promise<string> {
   }
   const json = (await res.json()) as { data: { b64_json: string }[] };
   return `data:image/jpeg;base64,${json.data[0].b64_json}`;
+}
+
+/* ---------- AIとおしゃべり ---------- */
+
+const CHAT_SYSTEM = `あなたは、おじいちゃん・おばあちゃんがお孫さんに贈る絵本づくりを手伝う、聞き上手な「おはなし係」です。
+画面の文字は読み上げられます。相手はご高齢の方で、声で答えます。
+
+話し方:
+- やさしく、ゆっくり、短く。1回の返事は2文まで、全角70文字くらいまで。
+- 質問は1回に1つだけ。答えやすい具体的な質問にする(「お孫さんは何歳ですか?」「いっしょに行った場所はありますか?」)。
+- 相手の言葉をまず受け止めて、ほめたり、共感したりしてから次を聞く。
+- 昔の思い出や、お孫さんの好きなもの・くせ・口ぐせを、楽しく思い出してもらえるように聞く(回想法)。
+- むずかしい言葉、カタカナ語、絵文字は使わない。
+
+聞きたいこと(順番は会話に合わせて自由に):
+- だれに贈るか(to)、お孫さんから何と呼ばれているか(from、例「おばあちゃん」)
+- 主人公(hero。お孫さん本人、動物、ご自身など)
+- どんなおはなしにするか(adventure。思い出の場所、いっしょにしたいこと、夢など)
+- 最後に伝えたい言葉(message)
+- 物語に生かせる細かい思い出や好きなもの(notes に箇条書きでためていく)
+
+memo には、これまでの会話でわかったことをすべて入れて返す(わからない項目は空文字)。
+hero, adventure, message, from, to がそろい、もう少し思い出も聞けたら(だいたい6〜10往復)、ready を true にして
+「すてきなおはなしになりそうです。この内容で絵本をつくりましょうか?」のように声をかける。
+相手がもっと話したそうなら、ready のあとも会話を続けてよい。`;
+
+const ChatSchema = z.object({
+  reply: z.string().describe("相手への返事(読み上げられる)"),
+  memo: z.object({
+    hero: z.string(),
+    adventure: z.string(),
+    message: z.string(),
+    from: z.string(),
+    to: z.string(),
+    notes: z.string().describe("物語に生かせる思い出や好きなもの。箇条書き"),
+  }),
+  ready: z.boolean(),
+});
+
+export async function chatTurn(history: ChatMessage[]): Promise<ChatTurn> {
+  // 長い会話は後ろだけ使う。開始の合図のあとが assistant になるようにそろえる
+  while (history.length && history[0].role === "user") history = history.slice(1);
+  const messages = [
+    { role: "user" as const, content: "(おしゃべりを始めてください。まずあいさつをして、だれに絵本を贈るか聞いてください)" },
+    ...history.map((m) => ({ role: m.role, content: m.text })),
+  ];
+  // Messages API は user と assistant が交互になる必要がある。最初の assistant の前に開始の合図を置いている。
+  const res = await getClient().beta.messages.parse({
+    model: MODEL,
+    max_tokens: 4000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    output_config: { effort: "low", format: zodOutputFormat(ChatSchema) },
+    system: CHAT_SYSTEM,
+    messages,
+  });
+  if (res.stop_reason === "refusal" || !res.parsed_output) {
+    throw new Error("うまく聞き取れませんでした。もう一度お話しください。");
+  }
+  return res.parsed_output as ChatTurn;
 }
