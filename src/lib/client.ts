@@ -66,7 +66,7 @@ export function illustrate(book: Book, scene: string, label: string, extra = "",
   const prompt = [
     stylePrompt(book),
     hasRef
-      ? "The attached image is the character design sheet. Draw the characters exactly as in it: same faces, hairstyles, clothes, colors and proportions."
+      ? "The attached image is only a character design reference. Keep the characters' faces, hairstyles, clothes, colors and proportions exactly the same, but draw a completely new picture of the scene below: new poses, actions, expressions, camera angle and a full background. Do not copy the layout or the standing poses of the reference."
       : "",
     `Characters: ${book.characterSheet}`,
     `Scene: ${scene}`,
