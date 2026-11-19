@@ -115,7 +115,7 @@ export async function generateIllustration(prompt: string, references: string[] 
 
 async function geminiImage(prompt: string, references: string[]): Promise<Buffer> {
   // Gemini の Interactions API(画像生成の公式ドキュメントの書き方)
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { apiVersion: "v1beta" } });
   const images = references.map((r) => r.match(/^data:(.+?);base64,(.+)$/)).filter((m) => m !== null);
   const interaction = await ai.interactions.create({
     model: process.env.GEMINI_IMAGE_MODEL || "gemini-nano-banana-2.1",
