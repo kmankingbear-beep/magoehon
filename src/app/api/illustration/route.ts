@@ -8,6 +8,8 @@ export async function POST(req: Request) {
   try {
     return Response.json({ image: await generateIllustration(prompt, (references ?? []).slice(0, 4)) });
   } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : "エラーが起きました" }, { status: 500 });
+    console.error("illustration error", e);
+    const detail = e instanceof Error ? e.message.slice(0, 300) : String(e);
+    return Response.json({ error: "挿絵を作れませんでした。もう一度お試しください。", detail }, { status: 500 });
   }
 }

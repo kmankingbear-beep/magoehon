@@ -42,6 +42,6 @@ npm run dev                  # http://localhost:3000
 
 - Next.js(App Router)+ TypeScript。PC・タブレットのブラウザで動く。
 - 文章: Claude API(`src/lib/ai.ts`、構造化出力で タイトル・登場人物の見た目・各ページの文章と場面 を受け取る)
-- 挿絵: Google Gemini の画像生成(既定 `gemini-3.1-flash-image-preview`、2K、3:2)。設定画を見本画像として毎回渡し、人物の見た目をそろえる。予備で OpenAI にも対応(`src/lib/ai.ts` の `generateIllustration`)。返す画像は sharp で JPEG にして軽くする。
+- 挿絵: Google Gemini の画像生成(既定 `gemini-nano-banana-2.1`、Interactions API、2K、3:2)。設定画を見本画像として毎回渡し、人物の見た目をそろえる。予備で OpenAI にも対応(`src/lib/ai.ts` の `generateIllustration`)。返す画像は sharp で JPEG にして軽くする。
 - PDF: ブラウザ内で pdf-lib により作成(`src/lib/pdf.ts`)
 - APIキーはサーバー側(`src/app/api/*`)だけで使い、ブラウザには出さない。

@@ -114,25 +114,24 @@ export async function generateIllustration(prompt: string, references: string[] 
 }
 
 async function geminiImage(prompt: string, references: string[]): Promise<Buffer> {
+  // Gemini の Interactions API(画像生成の公式ドキュメントの書き方)
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const parts = [
-    ...references.map((r) => {
-      const m = r.match(/^data:(.+?);base64,(.+)$/);
-      return m ? { inlineData: { mimeType: m[1], data: m[2] } } : null;
-    }).filter((p) => p !== null),
-    { text: prompt },
-  ];
-  const res = await ai.models.generateContent({
-    model: process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image-preview",
-    contents: [{ role: "user", parts }],
-    config: {
-      responseModalities: ["IMAGE"],
-      imageConfig: { aspectRatio: "3:2", imageSize: process.env.GEMINI_IMAGE_SIZE || "2K" },
+  const images = references.map((r) => r.match(/^data:(.+?);base64,(.+)$/)).filter((m) => m !== null);
+  const interaction = await ai.interactions.create({
+    model: process.env.GEMINI_IMAGE_MODEL || "gemini-nano-banana-2.1",
+    input: [
+      { type: "text", text: prompt },
+      ...images.map((m) => ({ type: "image" as const, mime_type: m[1], data: m[2] })),
+    ],
+    response_format: {
+      type: "image",
+      aspect_ratio: "3:2",
+      image_size: process.env.GEMINI_IMAGE_SIZE || "2K",
     },
-  });
-  const data = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData?.data;
+  } as Parameters<typeof ai.interactions.create>[0]);
+  const data = (interaction as { output_image?: { data?: string } }).output_image?.data;
   if (!data) {
-    console.error("gemini image: no image", JSON.stringify(res.candidates?.[0]?.finishReason ?? res.promptFeedback));
+    console.error("gemini image: no image", JSON.stringify(interaction).slice(0, 500));
     throw new Error("挿絵を作れませんでした。もう一度お試しください。");
   }
   return Buffer.from(data, "base64");
