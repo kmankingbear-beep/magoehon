@@ -2,7 +2,7 @@ import { chatTurn, hasTextAI } from "@/lib/ai";
 import { demoChat } from "@/lib/demo";
 import type { ChatMessage } from "@/lib/types";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function POST(req: Request) {
   const { history } = (await req.json()) as { history: ChatMessage[] };

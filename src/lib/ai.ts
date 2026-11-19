@@ -101,7 +101,7 @@ async function cloudflareJson<T extends z.ZodType>(schema: T, system: string, me
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(maxTokens > 2000 ? 110_000 : 50_000),
+      signal: AbortSignal.timeout(110_000),
     }).catch((e) => {
       console.error("cloudflare text timeout/network", e);
       throw new Error("AIの返事がおそすぎました。もう一度お試しください。");
