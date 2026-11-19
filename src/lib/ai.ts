@@ -9,7 +9,7 @@ import type { ChatMessage, ChatTurn, Memo, StoryResult } from "./types";
 export const MODEL = "claude-opus-5-5";
 
 export function hasTextAI() {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+  return Boolean(process.env.ANTHROPIC_API_KEY || hasCloudflare());
 }
 export function hasImageAI() {
   return Boolean(hasCloudflare() || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY);
@@ -53,19 +53,84 @@ const PageSchema = z.object({
   redrawImage: z.boolean().describe("挿絵を描き直す必要があるか"),
 });
 
-async function parse<T extends z.ZodType>(schema: T, user: string): Promise<z.infer<T>> {
+type Msg = { role: "user" | "assistant"; content: string };
+
+/**
+ * 決まった形(schema)の返事をAIからもらう。
+ * Claude の鍵があれば Claude、なければ Cloudflare Workers AI(無料分あり)を使う。
+ */
+async function structured<T extends z.ZodType>(
+  schema: T, system: string, messages: Msg[], opts: { effort: "low" | "medium"; maxTokens: number },
+): Promise<z.infer<T>> {
+  if (!process.env.ANTHROPIC_API_KEY) return cloudflareJson(schema, system, messages, opts.maxTokens);
   const res = await getClient().beta.messages.parse({
     model: MODEL,
-    max_tokens: 16000,
+    max_tokens: opts.maxTokens,
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
-    output_config: { effort: "medium", format: zodOutputFormat(schema) },
-    system: SYSTEM,
-    messages: [{ role: "user", content: user }],
+    output_config: { effort: opts.effort, format: zodOutputFormat(schema) },
+    system,
+    messages,
   });
   if (res.stop_reason === "refusal") throw new Error("AIがこの内容では作れませんでした。言葉を変えてもう一度お試しください。");
   if (!res.parsed_output) throw new Error("AIの返事を読み取れませんでした。もう一度お試しください。");
   return res.parsed_output as z.infer<T>;
+}
+
+/** 返事の文章から JSON の部分だけを取り出す */
+function extractJson(text: string): unknown {
+  const t = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const body = fence ? fence[1] : t;
+  const a = body.indexOf("{"), b = body.lastIndexOf("}");
+  if (a < 0 || b <= a) throw new Error("no json");
+  return JSON.parse(body.slice(a, b + 1));
+}
+
+async function cloudflareJson<T extends z.ZodType>(schema: T, system: string, messages: Msg[], maxTokens: number): Promise<z.infer<T>> {
+  const model = process.env.CLOUDFLARE_TEXT_MODEL || "@cf/zai-org/glm-4.7-flash";
+  const format = `\n\n# 返事の形\n返事は、次の JSON Schema に合う JSON オブジェクトだけを書いてください。前後に説明やコードブロックは書かないでください。文章はすべて自然な日本語で書いてください(英語と指定された項目は英語)。\n${JSON.stringify(z.toJSONSchema(schema))}`;
+  const body = {
+    messages: [{ role: "system", content: system + format }, ...messages],
+    max_tokens: maxTokens,
+    temperature: 0.7,
+  };
+  let lastErr = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
+      body: JSON.stringify(body),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      result?: { response?: unknown; choices?: { message?: { content?: string } }[] };
+      errors?: { message?: string }[];
+    };
+    if (!res.ok) {
+      console.error("cloudflare text error", res.status, JSON.stringify(json).slice(0, 500));
+      if (res.status === 429 || /neuron|limit/i.test(JSON.stringify(json))) {
+        throw new Error("きょうの無料分を使いきりました。あしたまた、おためしください。");
+      }
+      throw new Error("AIの返事がありませんでした。もう一度お試しください。");
+    }
+    const r = json.result ?? {};
+    const raw = typeof r.response === "object" && r.response !== null
+      ? JSON.stringify(r.response)
+      : String(r.response ?? r.choices?.[0]?.message?.content ?? "");
+    try {
+      const parsed = schema.safeParse(extractJson(raw));
+      if (parsed.success) return parsed.data;
+      lastErr = parsed.error.message.slice(0, 300);
+    } catch (e) {
+      lastErr = `${e instanceof Error ? e.message : e}: ${raw.slice(0, 200)}`;
+    }
+    console.error("cloudflare text: bad json", attempt, lastErr);
+  }
+  throw new Error("AIの返事を読み取れませんでした。もう一度お試しください。");
+}
+
+async function parse<T extends z.ZodType>(schema: T, user: string): Promise<z.infer<T>> {
+  return structured(schema, SYSTEM, [{ role: "user", content: user }], { effort: "medium", maxTokens: 16000 });
 }
 
 export async function generateStory(memo: Memo, storyPageCount: number): Promise<StoryResult> {
@@ -233,17 +298,10 @@ export async function chatTurn(history: ChatMessage[]): Promise<ChatTurn> {
     ...history.map((m) => ({ role: m.role, content: m.text })),
   ];
   // Messages API は user と assistant が交互になる必要がある。最初の assistant の前に開始の合図を置いている。
-  const res = await getClient().beta.messages.parse({
-    model: MODEL,
-    max_tokens: 4000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: { effort: "low", format: zodOutputFormat(ChatSchema) },
-    system: CHAT_SYSTEM,
-    messages,
-  });
-  if (res.stop_reason === "refusal" || !res.parsed_output) {
+  try {
+    return await structured(ChatSchema, CHAT_SYSTEM, messages, { effort: "low", maxTokens: 4000 });
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("無料分")) throw e;
     throw new Error("うまく聞き取れませんでした。もう一度お話しください。");
   }
-  return res.parsed_output as ChatTurn;
 }
