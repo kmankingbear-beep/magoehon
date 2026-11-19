@@ -12,7 +12,10 @@ export function hasTextAI() {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 export function hasImageAI() {
-  return Boolean(process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY);
+  return Boolean(hasCloudflare() || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY);
+}
+function hasCloudflare() {
+  return Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
 }
 
 let client: Anthropic | null = null;
@@ -109,8 +112,28 @@ ${all}
 
 /** 挿絵を作る。Gemini があれば Gemini、なければ OpenAI。references は見本の絵(data URL) */
 export async function generateIllustration(prompt: string, references: string[] = []): Promise<string> {
+  // 無料の Cloudflare を優先。なければ Gemini、なければ OpenAI
+  if (hasCloudflare()) return toJpeg(await cloudflareImage(prompt), 2048);
   const raw = process.env.GEMINI_API_KEY ? await geminiImage(prompt, references) : await openaiImage(prompt);
   return toJpeg(raw);
+}
+
+/** Cloudflare Workers AI(FLUX.1 schnell)。毎日の無料分がある。正方形で返るので、上下が少し切れる */
+async function cloudflareImage(prompt: string): Promise<Buffer> {
+  const model = process.env.CLOUDFLARE_IMAGE_MODEL || "@cf/black-forest-labs/flux-1-schnell";
+  const text = `${prompt}\nKeep all important subjects in the middle band of the image; the top and bottom edges will be cropped.`;
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
+    body: JSON.stringify({ prompt: text.slice(0, 2048), steps: 8 }),
+  });
+  const json = (await res.json().catch(() => ({}))) as { result?: { image?: string }; image?: string; errors?: { message?: string }[] };
+  const image = json.result?.image ?? json.image;
+  if (!res.ok || !image) {
+    console.error("cloudflare image error", res.status, JSON.stringify(json).slice(0, 500));
+    throw new Error(`Cloudflare ${res.status}: ${json.errors?.[0]?.message ?? "no image"}`);
+  }
+  return Buffer.from(image, "base64");
 }
 
 async function geminiImage(prompt: string, references: string[]): Promise<Buffer> {
@@ -158,8 +181,10 @@ async function openaiImage(prompt: string): Promise<Buffer> {
 }
 
 /** 返す大きさをおさえるため JPEG にする(Vercel の応答は4.5MBまで) */
-async function toJpeg(buf: Buffer): Promise<string> {
-  const out = await sharp(buf).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+async function toJpeg(buf: Buffer, upscaleTo?: number): Promise<string> {
+  let img = sharp(buf);
+  if (upscaleTo) img = img.resize({ width: upscaleTo, kernel: "lanczos3" });
+  const out = await img.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
   return `data:image/jpeg;base64,${out.toString("base64")}`;
 }
 

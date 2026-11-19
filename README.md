@@ -35,7 +35,7 @@ npm run dev                  # http://localhost:3000
 ```
 
 - `ANTHROPIC_API_KEY` がない → 文章は「おためしの文章」(メモの言葉をはめこんだひな形)。
-- `GEMINI_API_KEY` も `OPENAI_API_KEY` もない → 挿絵は「おためしの絵」(ブラウザで描くくまの絵)。
+- 挿絵は `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_API_TOKEN`(無料分あり、FLUX.1 schnell)→ `GEMINI_API_KEY` → `OPENAI_API_KEY` の順に使う。どれもない → 「おためしの絵」(ブラウザで描くくまの絵)。
 - 画面右上に「おためし」と出ていれば、どちらかのキーが未設定です。
 
 ## 技術構成
