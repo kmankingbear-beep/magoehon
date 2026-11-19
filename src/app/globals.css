@@ -267,3 +267,17 @@ button, input, textarea { font: inherit; color: inherit; }
 .btn.glow { animation: pulse 1.6s infinite; }
 .two > * { min-width: 0; }
 .two .btn.mic { min-width: 5rem; padding: 0.4rem 0.6rem; }
+
+/* ---------- 絵の候補 ---------- */
+.wide-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.cands { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; }
+.cands.small { grid-template-columns: repeat(3, 1fr); }
+.cand { position: relative; padding: 0; border: 4px solid transparent; border-radius: 10px; overflow: hidden; cursor: pointer; background: none; }
+.cand img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; }
+.cand.on { border-color: var(--accent); }
+.cand-check {
+  position: absolute; top: 4px; right: 4px; width: 2rem; height: 2rem; border-radius: 50%; background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-weight: 700;
+}
+.chara { position: relative; border: 3px solid var(--line); border-radius: var(--radius); overflow: hidden; min-height: 300px; display: grid; place-items: center; background: #fffaf2; }
+.chara img { width: 100%; }

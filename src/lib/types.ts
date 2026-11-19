@@ -94,6 +94,8 @@ export type Page = {
   /** data URL(PNG/JPEG) */
   image?: string;
   imageIsDummy?: boolean;
+  /** 描いた候補(この中から1枚えらぶ) */
+  candidates?: string[];
   sheet?: Sheet;
 };
 
@@ -106,6 +108,12 @@ export type Book = {
   /** 登場人物の見た目(挿絵の一貫性のため。英語) */
   characterSheet: string;
   coverScene: string;
+  /** 1冊分の絵の方針(英語) */
+  artDirection?: string;
+  /** 登場人物の設定画。全ページの見本にする */
+  characterImage?: string;
+  characterImageIsDummy?: boolean;
+  coverCandidates?: string[];
   coverImage?: string;
   coverImageIsDummy?: boolean;
   pages: Page[];
@@ -120,6 +128,7 @@ export type StoryResult = {
   title: string;
   characterSheet: string;
   coverScene: string;
+  artDirection?: string;
   pages: { text: string; scene: string }[];
 };
 

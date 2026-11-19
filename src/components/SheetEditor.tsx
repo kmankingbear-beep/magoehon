@@ -318,7 +318,10 @@ function FixPanel({ book, cur, update }: { book: Book; cur: SheetRef; update: Up
     try {
       if (cur.kind === "cover") {
         const r = await illustrate(book, book.coverScene, book.title, request);
-        update((b) => ({ ...b, coverImage: r.image, coverImageIsDummy: r.dummy }));
+        update((b) => ({
+          ...b, coverImage: r.images[0], coverImageIsDummy: r.dummy,
+          coverCandidates: [...r.images, ...(b.coverCandidates ?? (b.coverImage ? [b.coverImage] : []))].slice(0, 6),
+        }));
       } else if (cur.kind === "page") {
         const i = cur.index;
         const page = book.pages[i];
@@ -335,7 +338,13 @@ function FixPanel({ book, cur, update }: { book: Book; cur: SheetRef; update: Up
         }
         if (redraw) {
           const img = await illustrate(book, scene, text, kind === "fix" ? request : "");
-          update((b) => ({ ...b, pages: b.pages.map((q, j) => (j === i ? { ...q, image: img.image, imageIsDummy: img.dummy } : q)) }));
+          update((b) => ({
+            ...b,
+            pages: b.pages.map((q, j) => (j === i ? {
+              ...q, image: img.images[0], imageIsDummy: img.dummy,
+              candidates: [...img.images, ...(q.candidates ?? (q.image ? [q.image] : []))].slice(0, 6),
+            } : q)),
+          }));
         }
       }
       setRequest("");
@@ -360,6 +369,27 @@ function FixPanel({ book, cur, update }: { book: Book; cur: SheetRef; update: Up
         <button className="btn big" disabled={busy} onClick={() => run("redraw")}>{busy ? "かいています…" : "絵を かきなおす"}</button>
       </div>
       {error && <p className="error">{error}</p>}
+      {(() => {
+        const list = cur.kind === "cover" ? book.coverCandidates : cur.kind === "page" ? book.pages[cur.index].candidates : undefined;
+        const chosen = cur.kind === "cover" ? book.coverImage : cur.kind === "page" ? book.pages[cur.index].image : undefined;
+        if (!list || list.length < 2) return null;
+        const choose = (c: string) => update((b) => cur.kind === "cover"
+          ? { ...b, coverImage: c }
+          : { ...b, pages: b.pages.map((q, j) => (cur.kind === "page" && j === cur.index ? { ...q, image: c } : q)) });
+        return (
+          <>
+            <span className="label">かいた絵から えらぶ</span>
+            <div className="cands small">
+              {list.map((c, k) => (
+                <button key={k} className={`cand ${c === chosen ? "on" : ""}`} onClick={() => choose(c)}>
+                  <img src={c} alt="" />
+                  {c === chosen && <span className="cand-check">✓</span>}
+                </button>
+              ))}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
-import { illustrate, newId, postJson } from "@/lib/client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { illustrate, illustrateCharacters, newId, postJson } from "@/lib/client";
 import { deleteBook, listBooks, saveBook } from "@/lib/store";
 import {
   ART_STYLES, EXTRA_PAGES, STORY_PAGE_OPTIONS,
@@ -184,6 +184,7 @@ function MemoStep({ initial, initialMemo, onDone }: { initial: Book | null; init
         style,
         storyPageCount: count,
         characterSheet: story.characterSheet,
+        artDirection: story.artDirection,
         coverScene: story.coverScene,
         pages: story.pages.map((p) => ({ text: p.text, scene: p.scene })),
         createdAt: initial?.createdAt ?? now,
@@ -243,44 +244,105 @@ function MemoStep({ initial, initialMemo, onDone }: { initial: Book | null; init
 }
 
 /* ---------- 2. AIがつくる ---------- */
+function Candidates({ list, chosen, onChoose }: { list?: string[]; chosen?: string; onChoose: (img: string) => void }) {
+  if (!list || list.length < 2) return chosen ? <img src={chosen} alt="" /> : <span className="spinner" />;
+  return (
+    <div className="cands">
+      {list.map((c, k) => (
+        <button key={k} className={`cand ${c === chosen ? "on" : ""}`} onClick={() => onChoose(c)} aria-label={`${k + 1}まいめ`}>
+          <img src={c} alt="" />
+          {c === chosen && <span className="cand-check">✓</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function GenerateStep({ book, update, onNext }: { book: Book; update: (fn: (b: Book) => Book) => void; onNext: () => void }) {
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const [charBusy, setCharBusy] = useState(false);
+  const [charReq, setCharReq] = useState("");
+  // すでに絵があれば、設定画の確認はすんでいる
+  const [charOk, setCharOk] = useState(Boolean(book.coverImage || book.pages.some((p) => p.image)));
   const total = book.pages.length + 1;
   const done = (book.coverImage ? 1 : 0) + book.pages.filter((p) => p.image).length;
 
+  async function drawChara(extra = "") {
+    setCharBusy(true);
+    setError("");
+    try {
+      const r = await illustrateCharacters(book, extra);
+      update((b) => ({ ...b, characterImage: r.images[0], characterImageIsDummy: r.dummy }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "うまくいきませんでした");
+    } finally {
+      setCharBusy(false);
+    }
+  }
+
+  const charaStarted = useRef(false);
   useEffect(() => {
+    // 開いたときに1回だけ、設定画をかく
+    if (charaStarted.current || book.characterImage) return;
+    charaStarted.current = true;
+    void drawChara();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.id]);
+
+  useEffect(() => {
+    if (!charOk) return;
     let cancelled = false;
     (async () => {
       try {
+        // 表紙と各ページ。1場面2枚ずつ、2場面ずつ並べて描く
+        const jobs: (() => Promise<void>)[] = [];
         if (!book.coverImage) {
-          const r = await illustrate(book, book.coverScene, book.title);
-          if (cancelled) return;
-          update((b) => ({ ...b, coverImage: r.image, coverImageIsDummy: r.dummy }));
+          jobs.push(async () => {
+            const r = await illustrate(book, book.coverScene, book.title);
+            if (!cancelled) update((b) => ({ ...b, coverCandidates: r.images, coverImage: r.images[0], coverImageIsDummy: r.dummy }));
+          });
         }
-        // 2枚ずつ並べて描く
-        const todo = book.pages.map((p, i) => ({ p, i })).filter(({ p }) => !p.image);
-        for (let k = 0; k < todo.length; k += 2) {
-          await Promise.all(todo.slice(k, k + 2).map(async ({ p, i }) => {
+        book.pages.forEach((p, i) => {
+          if (p.image) return;
+          jobs.push(async () => {
             const r = await illustrate(book, p.scene, p.text);
-            if (cancelled) return;
-            update((b) => ({ ...b, pages: b.pages.map((q, j) => (j === i ? { ...q, image: r.image, imageIsDummy: r.dummy } : q)) }));
-          }));
-          if (cancelled) return;
-        }
+            if (!cancelled) update((b) => ({ ...b, pages: b.pages.map((q, j) => (j === i ? { ...q, candidates: r.images, image: r.images[0], imageIsDummy: r.dummy } : q)) }));
+          });
+        });
+        for (let k = 0; k < jobs.length && !cancelled; k += 2) await Promise.all(jobs.slice(k, k + 2).map((j) => j()));
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "うまくいきませんでした");
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 開いたときに1回だけ動かす
-  }, [book.id, attempt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 設定画を決めたあと1回だけ
+  }, [book.id, charOk, attempt]);
+
+  if (!charOk) {
+    return (
+      <section className="card">
+        <h1>主人公たちを かきました</h1>
+        <p className="lead">この絵を見本にして、ぜんぶのページを かきます。</p>
+        <div className="chara">
+          {book.characterImage ? <img src={book.characterImage} alt="登場人物" /> : <span className="spinner" />}
+          {charBusy && <div className="overlay"><span className="spinner" />かいています…</div>}
+        </div>
+        {error && <p className="error">{error}</p>}
+        <span className="row">
+          <input className="input" value={charReq} onChange={(e) => setCharReq(e.target.value)} placeholder="なおしたいこと(例: ぼうしを かぶせて、犬は しろい色)" />
+          <button className="btn big" disabled={charBusy} onClick={() => drawChara(charReq)}>かきなおす</button>
+        </span>
+        <button className="btn primary huge" disabled={charBusy || !book.characterImage} onClick={() => setCharOk(true)}>この主人公で 絵本をかく</button>
+      </section>
+    );
+  }
 
   return (
-    <section className="card">
+    <section className="card wide">
       <h1>「{book.title}」</h1>
       <p className="lead">
-        {done < total ? `絵をかいています… ${done} / ${total}` : "できあがりました!"}
+        {done < total ? `絵をかいています… ${done} / ${total}` : "できあがりました! 1つの場面に2まい かきました。すきなほうを えらんでください。"}
       </p>
       <progress className="progress" value={done} max={total} />
       {error && (
@@ -288,14 +350,15 @@ function GenerateStep({ book, update, onNext }: { book: Book; update: (fn: (b: B
           {error} <button className="btn small" onClick={() => { setError(""); setAttempt((a) => a + 1); }}>もう一度</button>
         </p>
       )}
-      <div className="grid">
+      <div className="grid wide-grid">
         <figure className={`thumb ${book.coverImage ? "" : "wait"}`}>
-          {book.coverImage ? <img src={book.coverImage} alt="表紙" /> : <span className="spinner" />}
+          <Candidates list={book.coverCandidates} chosen={book.coverImage} onChoose={(c) => update((b) => ({ ...b, coverImage: c }))} />
           <figcaption>表紙</figcaption>
         </figure>
         {book.pages.map((p, i) => (
           <figure key={i} className={`thumb ${p.image ? "" : "wait"}`}>
-            {p.image ? <img src={p.image} alt="" /> : <span className="spinner" />}
+            <Candidates list={p.candidates} chosen={p.image}
+              onChoose={(c) => update((b) => ({ ...b, pages: b.pages.map((q, j) => (j === i ? { ...q, image: c } : q)) }))} />
             <figcaption>{i + 1}. {p.text}</figcaption>
           </figure>
         ))}
@@ -327,8 +390,8 @@ function CoverStep({ book, update, onNext }: { book: Book; update: (fn: (b: Book
           <button className="btn big" disabled={busy} onClick={async () => {
             setBusy(true);
             try {
-              const r = await illustrate(book, book.coverScene, book.title);
-              update((b) => ({ ...b, coverImage: r.image, coverImageIsDummy: r.dummy }));
+              const r = await illustrate(book, book.coverScene, book.title, "", 1);
+              update((b) => ({ ...b, coverImage: r.images[0], coverImageIsDummy: r.dummy }));
             } finally { setBusy(false); }
           }}>表紙の絵を かきなおす</button>
         </div>

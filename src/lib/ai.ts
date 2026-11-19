@@ -2,6 +2,8 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { GoogleGenAI } from "@google/genai";
+import sharp from "sharp";
 import type { ChatMessage, ChatTurn, Memo, StoryResult } from "./types";
 
 export const MODEL = "claude-opus-5-5";
@@ -10,7 +12,7 @@ export function hasTextAI() {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 export function hasImageAI() {
-  return Boolean(process.env.OPENAI_API_KEY);
+  return Boolean(process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY);
 }
 
 let client: Anthropic | null = null;
@@ -25,12 +27,15 @@ const SYSTEM = `あなたは、おじいちゃん・おばあちゃんがお孫�
 - 怖い・悲しい展開は避け、あたたかく前向きなおはなしにする。
 - 最後のページで、贈る人が伝えたい言葉が自然に伝わるようにする。
 - 挿絵の指示(scene, characterSheet, coverScene)は画像生成AI向けに英語で書く。文字や吹き出しを絵に入れない指示にする。
-- characterSheet には主人公など登場人物の見た目(年齢、髪型、服の色など)を具体的に書き、全ページで同じ見た目になるようにする。`;
+- characterSheet には主人公など登場人物の見た目(年齢、髪型、服の色など)を具体的に書き、全ページで同じ見た目になるようにする。
+- artDirection には、この1冊の絵の方針(色づかい、光、季節、構図のくせ、線のタッチ)を英語で3〜5文で書く。全ページ共通で使う。
+- scene には、そのページで描くもの(だれが・どこで・何をしている・表情・カメラの距離)を具体的に書く。`;
 
 const StorySchema = z.object({
   title: z.string().describe("絵本のタイトル(ひらがな中心、20文字以内)"),
   characterSheet: z.string().describe("English. Consistent visual description of the main characters."),
   coverScene: z.string().describe("English. Cover illustration scene."),
+  artDirection: z.string().describe("English. Shared art direction for the whole book."),
   pages: z.array(
     z.object({
       text: z.string().describe("そのページの文章(日本語)"),
@@ -102,30 +107,61 @@ ${all}
   );
 }
 
-/** 挿絵を作る。OpenAI の画像生成APIを使う(キーがなければ呼ばない)。 */
-export async function generateIllustration(prompt: string): Promise<string> {
+/** 挿絵を作る。Gemini があれば Gemini、なければ OpenAI。references は見本の絵(data URL) */
+export async function generateIllustration(prompt: string, references: string[] = []): Promise<string> {
+  const raw = process.env.GEMINI_API_KEY ? await geminiImage(prompt, references) : await openaiImage(prompt);
+  return toJpeg(raw);
+}
+
+async function geminiImage(prompt: string, references: string[]): Promise<Buffer> {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const parts = [
+    ...references.map((r) => {
+      const m = r.match(/^data:(.+?);base64,(.+)$/);
+      return m ? { inlineData: { mimeType: m[1], data: m[2] } } : null;
+    }).filter((p) => p !== null),
+    { text: prompt },
+  ];
+  const res = await ai.models.generateContent({
+    model: process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image-preview",
+    contents: [{ role: "user", parts }],
+    config: {
+      responseModalities: ["IMAGE"],
+      imageConfig: { aspectRatio: "3:2", imageSize: process.env.GEMINI_IMAGE_SIZE || "2K" },
+    },
+  });
+  const data = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData?.data;
+  if (!data) {
+    console.error("gemini image: no image", JSON.stringify(res.candidates?.[0]?.finishReason ?? res.promptFeedback));
+    throw new Error("挿絵を作れませんでした。もう一度お試しください。");
+  }
+  return Buffer.from(data, "base64");
+}
+
+async function openaiImage(prompt: string): Promise<Buffer> {
   const res = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: JSON.stringify({
       model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1",
       prompt,
       size: "1536x1024",
-      quality: "medium",
-      output_format: "jpeg",
+      quality: "high",
       n: 1,
     }),
   });
   if (!res.ok) {
-    const body = await res.text();
-    console.error("image API error", res.status, body);
+    console.error("image API error", res.status, await res.text());
     throw new Error("挿絵を作れませんでした。もう一度お試しください。");
   }
   const json = (await res.json()) as { data: { b64_json: string }[] };
-  return `data:image/jpeg;base64,${json.data[0].b64_json}`;
+  return Buffer.from(json.data[0].b64_json, "base64");
+}
+
+/** 返す大きさをおさえるため JPEG にする(Vercel の応答は4.5MBまで) */
+async function toJpeg(buf: Buffer): Promise<string> {
+  const out = await sharp(buf).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  return `data:image/jpeg;base64,${out.toString("base64")}`;
 }
 
 /* ---------- AIとおしゃべり ---------- */

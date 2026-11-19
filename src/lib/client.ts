@@ -8,19 +8,72 @@ export async function postJson<T>(url: string, body: unknown): Promise<T> {
   return json as T;
 }
 
-/** 挿絵を1枚つくる。画像AIが使えないときは、おためしの絵を描く */
-export async function illustrate(book: Book, scene: string, label: string, extra = "") {
-  const style = ART_STYLES.find((s) => s.id === book.style)!.prompt;
-  const prompt = [
-    style,
-    `Characters (keep identical on every page): ${book.characterSheet}`,
-    `Scene: ${scene}`,
-    extra && `Adjustments: ${extra}`,
-    "Landscape composition. No text, letters, or speech bubbles in the image.",
+/** 見本として送る絵は小さくする(通信を軽くするため) */
+const shrinkCache = new Map<string, Promise<string>>();
+function shrink(dataUrl: string, maxW = 1024): Promise<string> {
+  let p = shrinkCache.get(dataUrl);
+  if (!p) {
+    p = (async () => {
+      const img = new Image();
+      img.src = dataUrl;
+      await img.decode();
+      const k = Math.min(1, maxW / img.naturalWidth);
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.naturalWidth * k);
+      c.height = Math.round(img.naturalHeight * k);
+      c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+      return c.toDataURL("image/jpeg", 0.88);
+    })();
+    shrinkCache.set(dataUrl, p);
+  }
+  return p;
+}
+
+function stylePrompt(book: Book) {
+  return [
+    ART_STYLES.find((s) => s.id === book.style)!.prompt,
+    "High quality professional children's picture book illustration, rich detail, gentle and warm, print quality.",
+    book.artDirection && `Art direction for the whole book: ${book.artDirection}`,
   ].filter(Boolean).join("\n");
-  const res = await postJson<{ image?: string; demo?: boolean }>("/api/illustration", { prompt });
-  if (res.image) return { image: res.image, dummy: false };
-  return { image: drawDummyIllustration(scene + label + extra + Math.random(), label), dummy: true };
+}
+
+type Result = { images: string[]; dummy: boolean };
+
+async function generate(prompt: string, references: string[], n: number, seed: string, label: string): Promise<Result> {
+  const refs = await Promise.all(references.map((r) => shrink(r)));
+  const results = await Promise.all(
+    Array.from({ length: n }, () => postJson<{ image?: string; demo?: boolean }>("/api/illustration", { prompt, references: refs })),
+  );
+  if (results.every((r) => r.image)) return { images: results.map((r) => r.image!), dummy: false };
+  return { images: Array.from({ length: n }, () => drawDummyIllustration(seed + Math.random(), label)), dummy: true };
+}
+
+/** 登場人物の設定画(全ページの見本) */
+export function illustrateCharacters(book: Book, extra = "") {
+  const prompt = [
+    stylePrompt(book),
+    `Character design sheet for a picture book. Characters: ${book.characterSheet}`,
+    "Show each character in full body, front view, friendly expression, standing side by side on a plain light background.",
+    extra && `Adjustments: ${extra}`,
+    "No text, letters, labels or speech bubbles.",
+  ].filter(Boolean).join("\n");
+  return generate(prompt, [], 1, "chara" + book.id, "とうじょうじんぶつ");
+}
+
+/** 場面の挿絵を n 枚(候補)つくる。設定画があれば見本として渡す */
+export function illustrate(book: Book, scene: string, label: string, extra = "", n = 2) {
+  const hasRef = Boolean(book.characterImage && !book.characterImageIsDummy);
+  const prompt = [
+    stylePrompt(book),
+    hasRef
+      ? "The attached image is the character design sheet. Draw the characters exactly as in it: same faces, hairstyles, clothes, colors and proportions."
+      : "",
+    `Characters: ${book.characterSheet}`,
+    `Scene: ${scene}`,
+    extra && `Adjustments requested by the author: ${extra}`,
+    "Wide landscape composition (3:2) with some calm space near the edges for text. No text, letters, or speech bubbles in the image.",
+  ].filter(Boolean).join("\n");
+  return generate(prompt, hasRef ? [book.characterImage!] : [], n, scene + label + extra, label);
 }
 
 export function newId() {
