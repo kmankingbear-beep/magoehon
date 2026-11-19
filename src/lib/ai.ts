@@ -180,11 +180,45 @@ ${all}
 }
 
 /** 挿絵を作る。Gemini があれば Gemini、なければ OpenAI。references は見本の絵(data URL) */
-export async function generateIllustration(prompt: string, references: string[] = []): Promise<string> {
+export async function generateIllustration(prompt: string, references: string[] = []): Promise<{ image: string; engine: string }> {
   // 無料の Cloudflare を優先。なければ Gemini、なければ OpenAI
-  if (hasCloudflare()) return toJpeg(await cloudflareImage(prompt), 2048);
+  if (hasCloudflare()) {
+    try {
+      // FLUX.2 klein: 見本の絵(設定画)を見ながらかけるので、ページごとの見た目がそろいやすい
+      return { image: await toJpeg(await fluxKlein(prompt, references), 2048), engine: "flux-2-klein" };
+    } catch (e) {
+      console.error("flux-2-klein failed, falling back to schnell", e);
+      return { image: await toJpeg(await cloudflareImage(prompt), 2048), engine: `flux-1-schnell (klein: ${String(e).slice(0, 200)})` };
+    }
+  }
   const raw = process.env.GEMINI_API_KEY ? await geminiImage(prompt, references) : await openaiImage(prompt);
-  return toJpeg(raw);
+  return { image: await toJpeg(raw), engine: process.env.GEMINI_API_KEY ? "gemini" : "openai" };
+}
+
+/** Cloudflare Workers AI の FLUX.2 klein(見本の絵を最大4枚まで渡せる) */
+async function fluxKlein(prompt: string, references: string[]): Promise<Buffer> {
+  const model = process.env.CLOUDFLARE_REF_IMAGE_MODEL || "@cf/black-forest-labs/flux-2-klein-4b";
+  const form = new FormData();
+  form.append("prompt", prompt.slice(0, 2048));
+  form.append("width", "1024");
+  form.append("height", "672");
+  const refs = references.map((r) => r.match(/^data:(.+?);base64,(.+)$/)).filter((m) => m !== null).slice(0, 4);
+  for (const [i, m] of refs.entries()) {
+    const small = await sharp(Buffer.from(m[2], "base64")).resize({ width: 768, height: 768, fit: "inside" }).jpeg({ quality: 88 }).toBuffer();
+    form.append(`input_image_${i}`, new Blob([new Uint8Array(small)], { type: "image/jpeg" }), `ref${i}.jpg`);
+  }
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
+    body: form,
+    signal: AbortSignal.timeout(90_000),
+  });
+  const json = (await res.json().catch(() => ({}))) as { result?: { image?: string }; image?: string; errors?: { message?: string }[] };
+  const image = json.result?.image ?? json.image;
+  if (!res.ok || !image) {
+    throw new Error(`klein ${res.status}: ${json.errors?.[0]?.message ?? JSON.stringify(json).slice(0, 200)}`);
+  }
+  return Buffer.from(image, "base64");
 }
 
 /** Cloudflare Workers AI(FLUX.1 schnell)。毎日の無料分がある。正方形で返るので、上下が少し切れる */

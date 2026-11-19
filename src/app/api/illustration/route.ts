@@ -6,7 +6,7 @@ export async function POST(req: Request) {
   if (!hasImageAI()) return Response.json({ demo: true });
   const { prompt, references } = (await req.json()) as { prompt: string; references?: string[] };
   try {
-    return Response.json({ image: await generateIllustration(prompt, (references ?? []).slice(0, 4)) });
+    return Response.json(await generateIllustration(prompt, (references ?? []).slice(0, 4)));
   } catch (e) {
     console.error("illustration error", e);
     const detail = e instanceof Error ? e.message.slice(0, 300) : String(e);
