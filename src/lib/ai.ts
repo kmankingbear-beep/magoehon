@@ -88,7 +88,7 @@ function extractJson(text: string): unknown {
 }
 
 async function cloudflareJson<T extends z.ZodType>(schema: T, system: string, messages: Msg[], maxTokens: number): Promise<z.infer<T>> {
-  const model = process.env.CLOUDFLARE_TEXT_MODEL || "@cf/zai-org/glm-4.7-flash";
+  const model = process.env.CLOUDFLARE_TEXT_MODEL || "@cf/google/gemma-4-26b-a4b-it";
   const format = `\n\n# 返事の形\n返事は、次の JSON Schema に合う JSON オブジェクトだけを書いてください。前後に説明やコードブロックは書かないでください。文章はすべて自然な日本語で書いてください(英語と指定された項目は英語)。\n${JSON.stringify(z.toJSONSchema(schema))}`;
   const body = {
     messages: [{ role: "system", content: system + format }, ...messages],
@@ -101,6 +101,10 @@ async function cloudflareJson<T extends z.ZodType>(schema: T, system: string, me
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(maxTokens > 2000 ? 110_000 : 50_000),
+    }).catch((e) => {
+      console.error("cloudflare text timeout/network", e);
+      throw new Error("AIの返事がおそすぎました。もう一度お試しください。");
     });
     const json = (await res.json().catch(() => ({}))) as {
       result?: { response?: unknown; choices?: { message?: { content?: string } }[] };
@@ -130,7 +134,7 @@ async function cloudflareJson<T extends z.ZodType>(schema: T, system: string, me
 }
 
 async function parse<T extends z.ZodType>(schema: T, user: string): Promise<z.infer<T>> {
-  return structured(schema, SYSTEM, [{ role: "user", content: user }], { effort: "medium", maxTokens: 16000 });
+  return structured(schema, SYSTEM, [{ role: "user", content: user }], { effort: "medium", maxTokens: process.env.ANTHROPIC_API_KEY ? 16000 : 4000 });
 }
 
 export async function generateStory(memo: Memo, storyPageCount: number): Promise<StoryResult> {
@@ -299,7 +303,7 @@ export async function chatTurn(history: ChatMessage[]): Promise<ChatTurn> {
   ];
   // Messages API は user と assistant が交互になる必要がある。最初の assistant の前に開始の合図を置いている。
   try {
-    return await structured(ChatSchema, CHAT_SYSTEM, messages, { effort: "low", maxTokens: 4000 });
+    return await structured(ChatSchema, CHAT_SYSTEM, messages, { effort: "low", maxTokens: process.env.ANTHROPIC_API_KEY ? 4000 : 1200 });
   } catch (e) {
     if (e instanceof Error && e.message.includes("無料分")) throw e;
     throw new Error("うまく聞き取れませんでした。もう一度お話しください。");
