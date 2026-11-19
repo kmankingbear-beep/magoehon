@@ -7,12 +7,14 @@ import {
   type Book, type Memo, type ServerStatus, type StoryResult,
 } from "@/lib/types";
 import { useSpeech } from "./useSpeech";
+import SheetEditor, { SheetCanvas } from "./SheetEditor";
+import { ensureDesigns } from "@/lib/design";
 
 type Step = "home" | "memo" | "generate" | "review" | "cover" | "print";
 const STEPS: { id: Step; label: string }[] = [
   { id: "memo", label: "おはなしメモ" },
   { id: "generate", label: "AIがつくる" },
-  { id: "review", label: "よみあわせ" },
+  { id: "review", label: "かざりつけ" },
   { id: "cover", label: "表紙と言葉" },
   { id: "print", label: "印刷用データ" },
 ];
@@ -52,17 +54,17 @@ export default function Studio() {
         {step === "home" && (
           <Home
             onNew={() => { setBook(null); setStep("memo"); }}
-            onOpen={(b) => { setBook(b); setStep("review"); }}
+            onOpen={(b) => { setBook(ensureDesigns(b)); setStep("review"); }}
           />
         )}
         {step === "memo" && (
           <MemoStep
             initial={book}
-            onDone={(b) => { setBook(b); void saveBook(b); setStep("generate"); }}
+            onDone={(b) => { const nb = ensureDesigns(b); setBook(nb); void saveBook(nb); setStep("generate"); }}
           />
         )}
         {step === "generate" && book && <GenerateStep book={book} update={update} onNext={() => setStep("review")} />}
-        {step === "review" && book && <ReviewStep book={book} update={update} onNext={() => setStep("cover")} />}
+        {step === "review" && book && <SheetEditor book={book} update={update} onNext={() => setStep("cover")} />}
         {step === "cover" && book && <CoverStep book={book} update={update} onNext={() => setStep("print")} />}
         {step === "print" && book && <PrintStep book={book} onBack={() => setStep("review")} />}
       </main>
@@ -290,99 +292,6 @@ function GenerateStep({ book, update, onNext }: { book: Book; update: (fn: (b: B
   );
 }
 
-/* ---------- 3. よみあわせ・てなおし ---------- */
-function ReviewStep({ book, update, onNext }: { book: Book; update: (fn: (b: Book) => Book) => void; onNext: () => void }) {
-  const [i, setI] = useState(0);
-  const [request, setRequest] = useState("");
-  const [busy, setBusy] = useState<"" | "fix" | "redraw">("");
-  const [editing, setEditing] = useState(false);
-  const [error, setError] = useState("");
-  const page = book.pages[i];
-  const { supported, listening, toggle } = useSpeech((t) => setRequest((r) => r + t));
-
-  const setPage = (patch: Partial<Book["pages"][number]>) =>
-    update((b) => ({ ...b, pages: b.pages.map((q, j) => (j === i ? { ...q, ...patch } : q)) }));
-
-  async function fix() {
-    setBusy("fix");
-    setError("");
-    try {
-      const r = await postJson<{ text: string; scene: string; redrawImage: boolean }>("/api/revise", {
-        title: book.title, characterSheet: book.characterSheet,
-        pages: book.pages.map((p) => ({ text: p.text })), index: i,
-        current: { text: page.text, scene: page.scene }, request,
-      });
-      setPage({ text: r.text, scene: r.scene });
-      if (r.redrawImage) {
-        const img = await illustrate(book, r.scene, r.text, request);
-        setPage({ text: r.text, scene: r.scene, image: img.image, imageIsDummy: img.dummy });
-      }
-      setRequest("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "うまくいきませんでした");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function redraw() {
-    setBusy("redraw");
-    setError("");
-    try {
-      const img = await illustrate(book, page.scene, page.text);
-      setPage({ image: img.image, imageIsDummy: img.dummy });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "うまくいきませんでした");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  const go = (d: number) => { setI((x) => Math.min(book.pages.length - 1, Math.max(0, x + d))); setEditing(false); setRequest(""); setError(""); };
-
-  return (
-    <section className="card wide">
-      <div className="pagehead">
-        <h1>よみあわせ・てなおし</h1>
-        <span className="pagenum">{i + 1} / {book.pages.length} ページ</span>
-      </div>
-      <div className="spread">
-        <div className="spread-img">
-          {page.image && <img src={page.image} alt="" />}
-          {busy && <div className="overlay"><span className="spinner" />{busy === "fix" ? "なおしています…" : "絵をかきなおしています…"}</div>}
-        </div>
-        {editing ? (
-          <textarea className="input spread-text-edit" value={page.text} onChange={(e) => setPage({ text: e.target.value })} rows={3} autoFocus />
-        ) : (
-          <p className="spread-text">{page.text}</p>
-        )}
-      </div>
-
-      <div className="nav">
-        <button className="btn big" disabled={i === 0} onClick={() => go(-1)}>◀ まえ</button>
-        <button className="btn big" disabled={i === book.pages.length - 1} onClick={() => go(1)}>つぎ ▶</button>
-      </div>
-
-      <div className="fixbox">
-        <span className="label">このページを なおしたいとき</span>
-        <span className="hint">例:「もっとやさしい色に」「ねこも出して」「文章をみじかく」</span>
-        <span className="row">
-          <input className="input" value={request} onChange={(e) => setRequest(e.target.value)} placeholder="なおしたいことを入れてください" />
-          {supported && <button className={`btn mic ${listening ? "on" : ""}`} onClick={toggle}>{listening ? "■ とめる" : "🎤 話す"}</button>}
-        </span>
-        <div className="row wrap">
-          <button className="btn primary big" disabled={!request.trim() || !!busy} onClick={fix}>AIになおしてもらう</button>
-          <button className="btn big" disabled={!!busy} onClick={redraw}>絵だけ かきなおす</button>
-          <button className="btn big" disabled={!!busy} onClick={() => setEditing((e) => !e)}>{editing ? "書きかえ おわり" : "文章を 自分で書きかえる"}</button>
-        </div>
-        {error && <p className="error">{error}</p>}
-      </div>
-
-      <button className="btn primary huge" onClick={onNext}>ぜんぶ読めたら、表紙へ</button>
-    </section>
-  );
-}
-
 /* ---------- 4. 表紙と贈る言葉 ---------- */
 function CoverStep({ book, update, onNext }: { book: Book; update: (fn: (b: Book) => Book) => void; onNext: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -392,9 +301,7 @@ function CoverStep({ book, update, onNext }: { book: Book; update: (fn: (b: Book
       <h1>表紙と 贈る言葉</h1>
       <div className="cover-layout">
         <div className="cover-preview">
-          {book.coverImage && <img src={book.coverImage} alt="表紙" />}
-          <div className="cover-title">{book.title}</div>
-          {book.memo.from && <div className="cover-from">{book.memo.from} より</div>}
+          <SheetCanvas book={book} refKey={{ kind: "cover" }} pxPerMm={4} className="stage-canvas" />
           {busy && <div className="overlay"><span className="spinner" />かいています…</div>}
         </div>
         <div>
@@ -413,6 +320,7 @@ function CoverStep({ book, update, onNext }: { book: Book; update: (fn: (b: Book
           }}>表紙の絵を かきなおす</button>
         </div>
       </div>
+      <p className="hint">文字の場所や かざりは、まえの「かざりつけ」で かえられます。</p>
       <button className="btn primary huge" onClick={onNext}>印刷用データをつくる</button>
     </section>
   );
@@ -424,6 +332,7 @@ function PrintStep({ book, onBack }: { book: Book; onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [spec, setSpec] = useState("");
+  const [prog, setProg] = useState("");
   const dummyCount = book.pages.filter((p) => p.imageIsDummy).length + (book.coverImageIsDummy ? 1 : 0);
   const totalPages = book.pages.length + EXTRA_PAGES;
 
@@ -435,7 +344,7 @@ function PrintStep({ book, onBack }: { book: Book; onBack: () => void }) {
     setError("");
     try {
       const { buildBookPdf } = await import("@/lib/pdf");
-      const bytes = await buildBookPdf(book);
+      const bytes = await buildBookPdf(book, (d, t) => setProg(` ${d} / ${t}`));
       setUrl(URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" })));
     } catch (e) {
       console.error(e);
@@ -457,7 +366,7 @@ function PrintStep({ book, onBack }: { book: Book; onBack: () => void }) {
       {dummyCount > 0 && <p className="warn">まだ「おためしの絵」が {dummyCount} 枚あります。画像AIを設定すると本番の絵になります。</p>}
       {error && <p className="error">{error}</p>}
       {!url ? (
-        <button className="btn primary huge" disabled={busy} onClick={make}>{busy ? "PDFをつくっています…" : "PDFをつくる"}</button>
+        <button className="btn primary huge" disabled={busy} onClick={make}>{busy ? `PDFをつくっています…${prog}` : "PDFをつくる"}</button>
       ) : (
         <>
           <a className="btn primary huge" href={url} download={`${book.title}.pdf`}>PDFをダウンロード</a>

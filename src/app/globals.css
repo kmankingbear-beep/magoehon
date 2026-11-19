@@ -173,3 +173,62 @@ button, input, textarea { font: inherit; color: inherit; }
   border: 3px solid var(--line); border-radius: 16px; background: #fff; cursor: pointer; font-weight: 700;
 }
 .bookitem img { width: 120px; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 10px; }
+
+/* ---------- かざりつけ ---------- */
+.stage-wrap { display: flex; justify-content: center; }
+.stage {
+  position: relative; width: 100%; aspect-ratio: 210 / 148;
+  border: 3px solid var(--line); border-radius: 6px; overflow: hidden; touch-action: none; background: #fff;
+}
+.stage-canvas { width: 100%; height: 100%; display: block; }
+.stage.drawing { cursor: crosshair; border-color: var(--accent); }
+.hit { position: absolute; cursor: grab; border: 3px dashed transparent; border-radius: 6px; margin: -6px; padding: 6px; box-sizing: content-box; }
+.hit:hover { border-color: rgba(224, 112, 63, 0.5); }
+.hit.on { border-color: var(--accent); background: rgba(224, 112, 63, 0.06); }
+.hit:active { cursor: grabbing; }
+.grip {
+  position: absolute; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); border: 4px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); cursor: ew-resize;
+}
+.grip.h { right: -20px; top: 50%; transform: translateY(-50%); }
+.grip.v { bottom: -20px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.draw-canvas { position: absolute; touch-action: none; }
+
+.strip { display: flex; gap: 0.5rem; overflow-x: auto; padding: 0.3rem 0.1rem 0.6rem; }
+.strip-item {
+  flex: none; display: flex; flex-direction: column; align-items: center; gap: 0.1rem; background: none;
+  border: 3px solid transparent; border-radius: 10px; padding: 0.2rem; cursor: pointer; font-size: 0.65rem; font-weight: 700;
+}
+.strip-item.on { border-color: var(--accent); background: var(--accent-soft); }
+.strip-canvas { width: 110px; height: auto; border: 1px solid var(--line); border-radius: 4px; }
+
+.tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; border-bottom: 3px solid var(--line); }
+.tab {
+  min-height: 64px; padding: 0.2rem 1rem; border: 3px solid var(--line); border-bottom: 0; border-radius: 14px 14px 0 0;
+  background: #f7efe4; font-weight: 700; cursor: pointer; margin-bottom: -3px;
+}
+.tab.on { background: #fffaf2; border-color: var(--accent); }
+.panel { background: #fffaf2; border: 3px solid var(--accent); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); padding: 1rem; margin-top: -1rem; }
+.panel-body, .drawtools { display: flex; flex-direction: column; gap: 0.7rem; }
+.choice.layout { display: inline-flex; align-items: center; gap: 0.5rem; }
+.licon { width: 60px; height: 40px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.swatch { width: 60px; height: 60px; border-radius: 50%; border: 3px solid #c9b8a4; cursor: pointer; }
+.swatch.on { outline: 5px solid var(--accent); outline-offset: 2px; }
+.btn.pressed { background: var(--accent-soft); border-color: var(--accent); }
+.stamps { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.stamp { width: 72px; height: 72px; font-size: 2.2rem; border-radius: 16px; border: 3px solid var(--line); background: #fff; cursor: pointer; }
+.stamp.on { border-color: var(--accent); background: var(--accent-soft); }
+.dot { display: inline-block; border-radius: 50%; background: var(--ink); margin-right: 0.3rem; }
+.cover-preview .stage-canvas { position: absolute; inset: 0; }
+.editor-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+.editor-left, .editor-right { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+@media (min-width: 1000px) {
+  .card.wide.editor { max-width: 1500px; }
+  .editor-grid { grid-template-columns: minmax(0, 1.6fr) minmax(360px, 1fr); align-items: start; }
+  .editor-right { position: sticky; top: 0.5rem; }
+  .editor-right .tab { font-size: 0.85rem; padding: 0.2rem 0.6rem; }
+  .editor-right .swatch { width: 52px; height: 52px; }
+  .editor-right .stamp { width: 60px; height: 60px; font-size: 1.8rem; }
+}
+.stage { max-width: 100%; }
