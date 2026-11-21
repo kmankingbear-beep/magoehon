@@ -9,7 +9,14 @@ import type { ChatMessage, ChatTurn, Memo, StoryResult } from "./types";
 export const MODEL = "claude-opus-5-5";
 
 export function hasTextAI() {
-  return Boolean(process.env.ANTHROPIC_API_KEY || hasCloudflare());
+  return Boolean(process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY || hasCloudflare());
+}
+/** 文章のAIを何で動かしているか(画面の表示用) */
+export function textEngine() {
+  if (process.env.ANTHROPIC_API_KEY) return "claude";
+  if (process.env.GEMINI_API_KEY) return "gemini";
+  if (hasCloudflare()) return "cloudflare";
+  return "demo";
 }
 export function hasImageAI() {
   return Boolean(hasCloudflare() || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY);
@@ -57,12 +64,22 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 /**
  * 決まった形(schema)の返事をAIからもらう。
- * Claude の鍵があれば Claude、なければ Cloudflare Workers AI(無料分あり)を使う。
+ * Claude の鍵があれば Claude。なければ Gemini(無料枠)、Gemini がだめなら Cloudflare Workers AI(無料分あり)。
  */
 async function structured<T extends z.ZodType>(
   schema: T, system: string, messages: Msg[], opts: { effort: "low" | "medium"; maxTokens: number },
 ): Promise<z.infer<T>> {
-  if (!process.env.ANTHROPIC_API_KEY) return cloudflareJson(schema, system, messages, opts.maxTokens);
+  if (!process.env.ANTHROPIC_API_KEY) {
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        return await geminiJson(schema, system, messages);
+      } catch (e) {
+        console.error("gemini text failed", e);
+        if (!hasCloudflare()) throw e instanceof GeminiUserError ? e : new Error("AIの返事がありませんでした。もう一度お試しください。");
+      }
+    }
+    return cloudflareJson(schema, system, messages, opts.maxTokens);
+  }
   const res = await getClient().beta.messages.parse({
     model: MODEL,
     max_tokens: opts.maxTokens,
@@ -85,6 +102,64 @@ function extractJson(text: string): unknown {
   const a = body.indexOf("{"), b = body.lastIndexOf("}");
   if (a < 0 || b <= a) throw new Error("no json");
   return JSON.parse(body.slice(a, b + 1));
+}
+
+class GeminiUserError extends Error {}
+
+/** Gemini に渡す JSON Schema("$schema" の行は外す) */
+function jsonSchemaFor(schema: z.ZodType) {
+  const js = { ...(z.toJSONSchema(schema) as Record<string, unknown>) };
+  delete js.$schema;
+  return js;
+}
+
+/** Gemini の無料枠で使う文章モデル。上から順にためし、見つからなければ次へ */
+const GEMINI_TEXT_MODELS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3-flash-preview"];
+let geminiWorkingModel: string | null = null;
+
+async function geminiJson<T extends z.ZodType>(schema: T, system: string, messages: Msg[]): Promise<z.infer<T>> {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const models = process.env.GEMINI_TEXT_MODEL
+    ? [process.env.GEMINI_TEXT_MODEL]
+    : geminiWorkingModel ? [geminiWorkingModel, ...GEMINI_TEXT_MODELS.filter((m) => m !== geminiWorkingModel)] : GEMINI_TEXT_MODELS;
+  const contents = messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+  let lastErr: unknown = null;
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction: system,
+            responseMimeType: "application/json",
+            responseJsonSchema: jsonSchemaFor(schema),
+            temperature: 0.8,
+            abortSignal: AbortSignal.timeout(60_000),
+          },
+        });
+        const parsed = schema.safeParse(extractJson(res.text ?? ""));
+        if (parsed.success) {
+          geminiWorkingModel = model;
+          return parsed.data;
+        }
+        lastErr = new Error(`gemini bad json: ${parsed.error.message.slice(0, 200)}`);
+      } catch (e) {
+        lastErr = e;
+        const msg = String(e instanceof Error ? e.message : e);
+        // モデルが見つからない → 次のモデルへ
+        if (/\b404\b|not found|NOT_FOUND|not supported/i.test(msg)) break;
+        // 1分あたりの回数を超えた → 少し待ってもう一度
+        if (/\b429\b|RESOURCE_EXHAUSTED/i.test(msg)) {
+          if (attempt === 0 && !/per ?day|PerDay/i.test(msg)) { await new Promise((r) => setTimeout(r, 8000)); continue; }
+          throw new GeminiUserError("きょうの無料分を使いきったか、こみあっています。しばらくしてからおためしください。");
+        }
+        if (/\b40[013]\b|API key|PERMISSION_DENIED/i.test(msg)) throw e;
+      }
+      console.error("gemini text retry", model, attempt, String(lastErr).slice(0, 300));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("gemini failed");
 }
 
 async function cloudflareJson<T extends z.ZodType>(schema: T, system: string, messages: Msg[], maxTokens: number): Promise<z.infer<T>> {

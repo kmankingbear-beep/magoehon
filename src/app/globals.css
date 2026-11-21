@@ -281,3 +281,72 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .chara { position: relative; border: 3px solid var(--line); border-radius: var(--radius); overflow: hidden; min-height: 300px; display: grid; place-items: center; background: #fffaf2; }
 .chara img { width: 100%; }
+
+/* ---------- スマホ(たて長の画面) ---------- */
+.wide-grid { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
+.grid { grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); }
+@media (max-width: 700px) {
+  html { font-size: 20px; }
+  h1 { font-size: 1.4rem; }
+  .topbar { padding: 0.4rem 0.7rem; position: sticky; top: 0; z-index: 20; }
+  .main { padding: 0.6rem 0.4rem 2.5rem; }
+  .card { padding: 1rem 0.9rem; border-radius: 16px; gap: 0.8rem; }
+
+  /* 手順の表示: 番号だけにして、いまの手順だけ名前を出す */
+  .stepper { padding: 0.4rem 0.5rem; gap: 0.2rem; overflow: hidden; }
+  .stepper li { min-width: 0; flex: 0 0 auto; }
+  .stepper li.now { flex: 1 1 auto; }
+  .stepper button { font-size: 0.85rem; padding: 0.25rem; justify-content: flex-start; }
+  .stepper li:not(.now) .label-text { display: none; }
+  .stepper .num { width: 1.8rem; height: 1.8rem; }
+
+  /* 文字の入る欄と「話す」ボタン: たてにならべて、欄を広く */
+  .row:has(> .btn.mic) { flex-direction: column; }
+  .row > .btn.mic, .two .btn.mic { min-width: 0; width: 100%; min-height: 56px; }
+  .choices .choice { flex: 1 1 auto; }
+  .btn.huge { min-height: 76px; }
+
+  /* おしゃべり */
+  .chat-log { height: 46vh; min-height: 260px; padding: 0.6rem; }
+  .avatar { font-size: 1.8rem; }
+  .bubble { max-width: 88%; font-size: 1.1rem; padding: 0.6rem 0.9rem; }
+  .btn.mic-huge { min-height: 96px; }
+  .chat-input .row:not(.wrap) .btn { flex: none; }
+
+  /* かざりつけ: ページを画面いっぱいにして、下の道具を動かしてもページが見えるように上にとめる */
+  .editor-left { display: contents; }
+  .editor .stage-wrap {
+    position: sticky; top: 3.2rem; z-index: 10; background: var(--card);
+    margin: 0 -0.9rem; padding: 0.3rem 0.3rem;
+  }
+  .stage { border-width: 2px; }
+  .grip { width: 40px; height: 40px; }
+  .grip.h { right: -22px; }
+  .grip.v { bottom: -22px; }
+  .nav .btn { min-height: 64px; font-size: 1rem; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; border-bottom: 0; }
+  .tab { border-bottom: 3px solid var(--line); border-radius: 14px; margin: 0; font-size: 0.9rem; padding: 0.2rem 0.4rem; }
+  .tab.on { border-bottom-color: var(--accent); background: var(--accent-soft); }
+  .panel { border-top: 3px solid var(--accent); border-radius: var(--radius); margin-top: 0; padding: 0.8rem; }
+  .choice.layout { justify-content: flex-start; }
+  .choices:has(.choice.layout) { display: grid; grid-template-columns: 1fr 1fr; }
+  .swatch { width: 52px; height: 52px; }
+  .stamp { width: 60px; height: 60px; font-size: 1.9rem; }
+  .row.wrap > .btn { flex: 1 1 40%; }
+  .strip-canvas { width: 90px; }
+
+  .cover-title { font-size: 1rem; }
+  .bookitem img { width: 90px; }
+  .pdfview { height: 55vh; }
+}
+/* スマホを横にしたとき: ページが画面からはみ出さないように */
+@media (max-height: 500px) and (orientation: landscape) {
+  .stage { max-width: calc((100vh - 1rem) * 210 / 148); margin: 0 auto; }
+  .topbar { position: static; }
+}
+@media (max-width: 700px) {
+  .stepper li.now button { white-space: nowrap; }
+  .choices:has(.choice.layout) .choice { min-width: 0; padding: 0.3rem 0.5rem; font-size: 0.9rem; gap: 0.3rem; }
+  .choice.layout .licon { width: 44px; height: 30px; flex: none; }
+  .choice.layout.on::before { content: none; }
+}

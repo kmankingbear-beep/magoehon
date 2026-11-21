@@ -34,8 +34,9 @@ cp .env.example .env.local   # キーがあれば書く(なくても動く)
 npm run dev                  # http://localhost:3000
 ```
 
-- 文章・おしゃべりは `ANTHROPIC_API_KEY`(Claude)→ Cloudflare(`CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_API_TOKEN`、既定モデル Gemma 4 26B)の順に使う。どちらもない → 「おためしの文章」(メモの言葉をはめこんだひな形)。
+- 文章・おしゃべりは `ANTHROPIC_API_KEY`(Claude)→ `GEMINI_API_KEY`(無料枠のFlash。`GEMINI_TEXT_MODEL` で指定、なければ gemini-3.8-flash から順にためす。失敗したら次へ)→ Cloudflare(`CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_API_TOKEN`、既定モデル Gemma 4 26B)の順に使う。どれもない → 「おためしの文章」(メモの言葉をはめこんだひな形)。
 - 挿絵は `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_API_TOKEN`(無料分あり、FLUX.1 schnell)→ `GEMINI_API_KEY` → `OPENAI_API_KEY` の順に使う。どれもない → 「おためしの絵」(ブラウザで描くくまの絵)。
+- 無料枠の Gemini は、送った文章が Google のサービス改善に使われることがあります(孫の名前などが入ります)。気になる場合は有料枠か Claude を使ってください。
 - 画面右上に「おためし」と出ていれば、どちらかのキーが未設定です。
 
 ## 技術構成

@@ -90,7 +90,7 @@ function Stepper({ step, onJump }: { step: Step; onJump?: (s: Step) => void }) {
         <li key={s.id} className={i === idx ? "now" : i < idx ? "done" : ""}>
           <button disabled={!onJump || s.id === "generate" || s.id === "chat" || i > idx} onClick={() => onJump?.(s.id)}>
             <span className="num">{i + 1}</span>
-            {s.label}
+            <span className="label-text">{s.label}</span>
           </button>
         </li>
       ))}
