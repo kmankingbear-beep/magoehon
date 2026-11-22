@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import sharp from "sharp";
 import type { ChatMessage, ChatTurn, Memo, StoryResult } from "./types";
 
@@ -72,14 +72,19 @@ async function structured<T extends z.ZodType>(
   if (!process.env.ANTHROPIC_API_KEY) {
     if (process.env.GEMINI_API_KEY) {
       try {
-        return await geminiJson(schema, system, messages);
+        const r = await geminiJson(schema, system, messages, opts.effort);
+        lastText.geminiError = "";
+        return r;
       } catch (e) {
         console.error("gemini text failed", e);
+        lastText.geminiError = String(e instanceof Error ? e.message : e).slice(0, 300);
         if (!hasCloudflare()) throw e instanceof GeminiUserError ? e : new Error("AIの返事がありませんでした。もう一度お試しください。");
       }
     }
+    lastText.engine = "cloudflare";
     return cloudflareJson(schema, system, messages, opts.maxTokens);
   }
+  lastText.engine = "claude";
   const res = await getClient().beta.messages.parse({
     model: MODEL,
     max_tokens: opts.maxTokens,
@@ -106,6 +111,9 @@ function extractJson(text: string): unknown {
 
 class GeminiUserError extends Error {}
 
+/** さいごに返事をしたAI(動作確認用) */
+export const lastText = { engine: "", geminiError: "" };
+
 /** Gemini に渡す JSON Schema("$schema" の行は外す) */
 function jsonSchemaFor(schema: z.ZodType) {
   const js = { ...(z.toJSONSchema(schema) as Record<string, unknown>) };
@@ -117,7 +125,7 @@ function jsonSchemaFor(schema: z.ZodType) {
 const GEMINI_TEXT_MODELS = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3-flash-preview"];
 let geminiWorkingModel: string | null = null;
 
-async function geminiJson<T extends z.ZodType>(schema: T, system: string, messages: Msg[]): Promise<z.infer<T>> {
+async function geminiJson<T extends z.ZodType>(schema: T, system: string, messages: Msg[], effort: "low" | "medium"): Promise<z.infer<T>> {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const models = process.env.GEMINI_TEXT_MODEL
     ? [process.env.GEMINI_TEXT_MODEL]
@@ -125,6 +133,7 @@ async function geminiJson<T extends z.ZodType>(schema: T, system: string, messag
   const contents = messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
   let lastErr: unknown = null;
   for (const model of models) {
+    let useThinking = true;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const res = await ai.models.generateContent({
@@ -135,12 +144,15 @@ async function geminiJson<T extends z.ZodType>(schema: T, system: string, messag
             responseMimeType: "application/json",
             responseJsonSchema: jsonSchemaFor(schema),
             temperature: 0.8,
+            // 考える時間を短くして、返事を早くする
+            ...(useThinking ? { thinkingConfig: { thinkingLevel: effort === "low" ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW } } : {}),
             abortSignal: AbortSignal.timeout(60_000),
           },
         });
         const parsed = schema.safeParse(extractJson(res.text ?? ""));
         if (parsed.success) {
           geminiWorkingModel = model;
+          lastText.engine = `gemini:${model}`;
           return parsed.data;
         }
         lastErr = new Error(`gemini bad json: ${parsed.error.message.slice(0, 200)}`);
@@ -154,7 +166,9 @@ async function geminiJson<T extends z.ZodType>(schema: T, system: string, messag
           if (attempt === 0 && !/per ?day|PerDay/i.test(msg)) { await new Promise((r) => setTimeout(r, 8000)); continue; }
           throw new GeminiUserError("きょうの無料分を使いきったか、こみあっています。しばらくしてからおためしください。");
         }
-        if (/\b40[013]\b|API key|PERMISSION_DENIED/i.test(msg)) throw e;
+        if (/API key|API_KEY|PERMISSION_DENIED|\b401\b|\b403\b/i.test(msg)) throw e;
+        // 考える時間の設定に対応していないモデル → 設定なしでもう一度
+        if (/\b400\b|INVALID_ARGUMENT/i.test(msg)) useThinking = false;
       }
       console.error("gemini text retry", model, attempt, String(lastErr).slice(0, 300));
     }
