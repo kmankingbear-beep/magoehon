@@ -7,24 +7,54 @@ export type SheetRef =
   | { kind: "message" }
   | { kind: "back" };
 
-/** 絵の場所(仕上がりに対する割合) */
-export const IMAGE_RECTS: Record<ImageLayout, { x: number; y: number; w: number; h: number } | null> = {
-  top: { x: 0, y: 0, w: 1, h: 0.7 },
-  bottom: { x: 0, y: 0.3, w: 1, h: 0.7 },
-  full: { x: 0, y: 0, w: 1, h: 1 },
-  left: { x: 0, y: 0, w: 0.6, h: 1 },
-  right: { x: 0.4, y: 0, w: 0.6, h: 1 },
-  none: null,
+export type Rect = { x: number; y: number; w: number; h: number };
+
+/** 絵の大きさの はんい */
+export const IMAGE_SIZE_MIN = 0.3;
+export const IMAGE_SIZE_MAX = 1;
+
+/** ならべ方ごとの、はじめの絵の大きさ */
+export const DEFAULT_IMAGE_SIZE: Record<ImageLayout, number> = {
+  top: 0.7, bottom: 0.7, full: 1, left: 0.6, right: 0.6, none: 1,
 };
 
-const BODY_POS: Record<ImageLayout, Pick<TextBox, "x" | "y" | "len" | "decor">> = {
-  top: { x: 0.07, y: 0.76, len: 0.86, decor: "none" },
-  bottom: { x: 0.07, y: 0.08, len: 0.86, decor: "none" },
-  full: { x: 0.1, y: 0.7, len: 0.8, decor: "plate" },
-  left: { x: 0.64, y: 0.3, len: 0.32, decor: "none" },
-  right: { x: 0.04, y: 0.3, len: 0.32, decor: "none" },
-  none: { x: 0.1, y: 0.4, len: 0.8, decor: "none" },
-};
+export const clampImageSize = (v: number) => Math.max(IMAGE_SIZE_MIN, Math.min(IMAGE_SIZE_MAX, v));
+
+export function imageSizeOf(sheet: Sheet): number {
+  return clampImageSize(sheet.imageSize ?? DEFAULT_IMAGE_SIZE[sheet.imageLayout]);
+}
+
+/** 絵の場所(仕上がりに対する割合)。上・下・左・右は 端にくっつけたまま のび ちぢみ、「絵いっぱい」は まんなかで 大きさが かわる */
+export function imageRect(sheet: Sheet): Rect | null {
+  const s = imageSizeOf(sheet);
+  switch (sheet.imageLayout) {
+    case "top": return { x: 0, y: 0, w: 1, h: s };
+    case "bottom": return { x: 0, y: 1 - s, w: 1, h: s };
+    case "left": return { x: 0, y: 0, w: s, h: 1 };
+    case "right": return { x: 1 - s, y: 0, w: s, h: 1 };
+    case "full": return { x: (1 - s) / 2, y: fullTop(s), w: s, h: s };
+    case "none": return null;
+  }
+}
+
+/** 「絵いっぱい」を小さくしたときは 上によせて、下に文字の場所をあける */
+const fullTop = (s: number) => Math.min((1 - s) / 2, 0.04);
+
+/** 本文のはじめの場所。絵の大きさに合わせて、絵のない所におく */
+function bodyPos(layout: ImageLayout, size: number): Pick<TextBox, "x" | "y" | "len" | "decor"> {
+  switch (layout) {
+    case "top": return size > 0.8
+      ? { x: 0.07, y: 0.74, len: 0.86, decor: "plate" }
+      : { x: 0.07, y: size + 0.05, len: 0.86, decor: "none" };
+    case "bottom": return { x: 0.07, y: 0.08, len: 0.86, decor: size > 0.8 ? "plate" : "none" };
+    case "full": return size > 0.8
+      ? { x: 0.1, y: 0.7, len: 0.8, decor: "plate" }
+      : { x: 0.1, y: fullTop(size) + size + 0.04, len: 0.8, decor: "none" };
+    case "left": return { x: Math.min(0.8, size + 0.04), y: 0.3, len: Math.max(0.16, 0.96 - size - 0.04), decor: size > 0.75 ? "plate" : "none" };
+    case "right": return { x: 0.04, y: 0.3, len: Math.max(0.16, 0.96 - size - 0.04), decor: size > 0.75 ? "plate" : "none" };
+    case "none": return { x: 0.1, y: 0.4, len: 0.8, decor: "none" };
+  }
+}
 
 let seq = 0;
 export const boxId = () => `t${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -37,7 +67,7 @@ function box(role: TextBox["role"], p: Partial<TextBox>): TextBox {
 }
 
 export function defaultPageSheet(): Sheet {
-  return { imageLayout: "top", bg: CREAM, texts: [box("body", BODY_POS.top)] };
+  return { imageLayout: "top", bg: CREAM, texts: [box("body", bodyPos("top", DEFAULT_IMAGE_SIZE.top))] };
 }
 
 export function defaultCoverSheet(): Sheet {
@@ -74,23 +104,45 @@ export function defaultMessageSheet(): Sheet {
   };
 }
 
+/** 前の版の手描き・スタンプの層は もう使わないので 取りのぞく */
+function stripDrawing(s: Sheet | undefined): Sheet | undefined {
+  if (!s || !("drawing" in s)) return s;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { drawing, ...rest } = s as Sheet & { drawing?: string };
+  return rest;
+}
+
 /** 古い形式の絵本にもデザインを足す */
 export function ensureDesigns(book: Book): Book {
   return {
     ...book,
-    coverSheet: book.coverSheet ?? defaultCoverSheet(),
-    dedicationSheet: book.dedicationSheet ?? defaultDedicationSheet(),
-    messageSheet: book.messageSheet ?? defaultMessageSheet(),
-    pages: book.pages.map((p) => (p.sheet ? p : { ...p, sheet: defaultPageSheet() })),
+    coverSheet: stripDrawing(book.coverSheet) ?? defaultCoverSheet(),
+    dedicationSheet: stripDrawing(book.dedicationSheet) ?? defaultDedicationSheet(),
+    messageSheet: stripDrawing(book.messageSheet) ?? defaultMessageSheet(),
+    pages: book.pages.map((p) => ({ ...p, sheet: stripDrawing(p.sheet) ?? defaultPageSheet() })),
   };
 }
 
-/** ならべ方を変える。本文の箱は新しいならべ方の場所に移す */
+/** ならべ方を変える。絵の大きさは そのならべ方の はじめの大きさに もどし、本文の箱は 新しい場所に移す */
 export function applyLayout(sheet: Sheet, layout: ImageLayout): Sheet {
+  const size = DEFAULT_IMAGE_SIZE[layout];
   return {
     ...sheet,
     imageLayout: layout,
-    texts: sheet.texts.map((t) => (t.role === "body" ? { ...t, ...BODY_POS[layout], vertical: false } : t)),
+    imageSize: undefined,
+    texts: sheet.texts.map((t) => (t.role === "body" ? { ...t, ...bodyPos(layout, size), vertical: false } : t)),
+  };
+}
+
+/** 絵の大きさを変える。moveBody なら 本文(よこ書き)も 絵のない所へ うごかす */
+export function applyImageSize(sheet: Sheet, size: number, moveBody: boolean): Sheet {
+  const s = clampImageSize(size);
+  return {
+    ...sheet,
+    imageSize: s,
+    texts: moveBody
+      ? sheet.texts.map((t) => (t.role === "body" && !t.vertical ? { ...t, ...bodyPos(sheet.imageLayout, s), decor: t.decor === "bubble" || t.decor === "outline" ? t.decor : bodyPos(sheet.imageLayout, s).decor } : t))
+      : sheet.texts,
   };
 }
 

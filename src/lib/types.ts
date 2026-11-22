@@ -83,8 +83,8 @@ export type Sheet = {
   imageLayout: ImageLayout;
   bg: string;
   texts: TextBox[];
-  /** 手描き・スタンプの層(すき通ったPNGの data URL)。ページ全体(塗り足しこみ)に重なる */
-  drawing?: string;
+  /** 絵の大きさ(0.3〜1)。ない時はならべ方ごとの決まった大きさ */
+  imageSize?: number;
 };
 
 export type Page = {

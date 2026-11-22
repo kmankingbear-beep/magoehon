@@ -1,11 +1,11 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { illustrate, postJson } from "@/lib/client";
 import {
-  applyLayout, getSheet, listSheets, newFreeBox, resolveText, sameRef, setSheet, sheetImage, type SheetRef,
+  IMAGE_SIZE_MAX, IMAGE_SIZE_MIN, applyImageSize, applyLayout, getSheet, imageRect, imageSizeOf, listSheets, newFreeBox,
+  resolveText, sameRef, setSheet, sheetImage, type SheetRef,
 } from "@/lib/design";
-import { BLEED_MM, DRAW_H, DRAW_W, PAGE_H_MM, PAGE_W_MM, TRIM_H_MM, TRIM_W_MM, renderSheet, type BoxRect } from "@/lib/render";
+import { renderSheet, type BoxRect } from "@/lib/render";
 import {
   BG_COLORS, IMAGE_LAYOUTS, TEXT_COLORS, TEXT_DECORS,
   type Book, type ImageLayout, type Sheet, type TextBox,
@@ -13,24 +13,28 @@ import {
 import { useSpeech } from "./useSpeech";
 
 type Update = (fn: (b: Book) => Book) => void;
-type Tool = "fix" | "layout" | "text" | "draw";
+type Tool = "fix" | "layout" | "text";
+
+/** 文字の大きさ(mm)の はんい */
+const TEXT_MIN = 3;
+const TEXT_MAX = 22;
 
 /* ---------- ページを描く canvas ---------- */
 export function SheetCanvas(props: {
-  book: Book; refKey: SheetRef; pxPerMm: number; skipDrawing?: boolean;
+  book: Book; refKey: SheetRef; pxPerMm: number;
   onRects?: (r: BoxRect[]) => void; className?: string;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const { book, refKey, pxPerMm, skipDrawing, onRects } = props;
+  const { book, refKey, pxPerMm, onRects } = props;
   // このページに関係するデータが変わったときだけ描きなおす
   const sig = JSON.stringify([
     getSheet(book, refKey), sheetImage(book, refKey)?.length, sheetImage(book, refKey)?.slice(-40),
-    book.title, book.memo, refKey.kind === "page" ? book.pages[refKey.index]?.text : "", skipDrawing, pxPerMm,
+    book.title, book.memo, refKey.kind === "page" ? book.pages[refKey.index]?.text : "", pxPerMm,
   ]);
   useEffect(() => {
     let alive = true;
     const off = document.createElement("canvas");
-    renderSheet(off, book, refKey, { pxPerMm, bleed: false, skipDrawing }).then((rects) => {
+    renderSheet(off, book, refKey, { pxPerMm, bleed: false }).then((rects) => {
       if (!alive || !ref.current) return;
       const c = ref.current;
       c.width = off.width;
@@ -65,17 +69,65 @@ export default function SheetEditor({ book, update, onNext }: { book: Book; upda
 
   const go = (i: number) => {
     const s = sheets[Math.max(0, Math.min(sheets.length - 1, i))];
+    if (draft) commit(draft);
     setCur(s.ref);
-    setSelected(null);
     setDraft(null);
-    if (tool === "fix" && s.ref.kind !== "page" && s.ref.kind !== "cover") setTool("layout");
+    let next = tool;
+    if (tool === "fix" && s.ref.kind !== "page" && s.ref.kind !== "cover") next = "layout";
+    setTool(next);
+    // 「もじ」を開いているときは、つぎのページでも さいしょの文字を えらんでおく
+    setSelected(next === "text" ? getSheet(book, s.ref).texts[0]?.id ?? null : null);
   };
+  const openText = () => {
+    setTool("text");
+    if (!selected) setSelected(sheet.texts[0]?.id ?? null);
+  };
+  /** 本文の大きさを 物語の全ページで そろえる */
+  const sizeAllBodies = (size: number) => update((b) => ({
+    ...b,
+    pages: b.pages.map((p) => p.sheet ? { ...p, sheet: { ...p.sheet, texts: p.sheet.texts.map((t) => (t.role === "body" ? { ...t, size } : t)) } } : p),
+  }));
+  /** 絵の大きさを 物語の全ページで そろえる(ならべ方が同じページだけ) */
+  const imageSizeAll = (layout: ImageLayout, size: number) => update((b) => ({
+    ...b,
+    pages: b.pages.map((p) => p.sheet && p.sheet.imageLayout === layout ? { ...p, sheet: applyImageSize(p.sheet, size, true) } : p),
+  }));
+
+  /* 絵の はしの まるい取っ手を ひっぱって 大きさを変える */
+  const imgDrag = useRef<{ base: Sheet } | null>(null);
+  const imgR = imageRect(sheet);
+  const hasImage = Boolean(sheetImage(book, cur)) && imgR !== null;
+  const onImgDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    imgDrag.current = { base: sheet };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onImgMove = (e: React.PointerEvent) => {
+    const d = imgDrag.current;
+    if (!d || !stage.current) return;
+    const r = stage.current.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+    const size = {
+      top: py, bottom: 1 - py, left: px, right: 1 - px,
+      // まんなか よこ・上によせた絵: 右下の取っ手の場所から大きさを出す
+      full: Math.max(Math.abs(px - 0.5) * 2, py - Math.min((1 - (imageRect(d.base)?.w ?? 1)) / 2, 0.04)), none: 1,
+    }[d.base.imageLayout];
+    setDraft(applyImageSize(d.base, size, true));
+  };
+  const onImgUp = () => {
+    if (imgDrag.current && draft) commit(draft);
+    imgDrag.current = null;
+  };
+  const gripPos = imgR && {
+    top: { left: 0.5, top: imgR.h }, bottom: { left: 0.5, top: imgR.y }, left: { left: imgR.w, top: 0.5 },
+    right: { left: imgR.x, top: 0.5 }, full: { left: imgR.x + imgR.w, top: imgR.y + imgR.h }, none: { left: 0, top: 0 },
+  }[sheet.imageLayout];
 
   /* ドラッグで文字を動かす・のばす */
   const stage = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: string; mode: "move" | "len"; sx: number; sy: number; box: TextBox; base: Sheet } | null>(null);
   const onBoxDown = (e: React.PointerEvent, id: string, mode: "move" | "len") => {
-    if (tool === "draw") return;
     e.stopPropagation();
     e.preventDefault();
     setSelected(id);
@@ -117,15 +169,26 @@ export default function SheetEditor({ book, update, onNext }: { book: Book; upda
       <div className="editor-left">
       <div className="stage-wrap">
         <div
-          className={`stage ${tool === "draw" ? "drawing" : ""}`}
+          className="stage"
           ref={stage}
-          onPointerDown={() => tool !== "draw" && setSelected(null)}
+          onPointerDown={() => setSelected(null)}
         >
-          <SheetCanvas book={shown} refKey={cur} pxPerMm={6} onRects={setRects} skipDrawing={tool === "draw"} className="stage-canvas" />
-          {tool === "draw" && editable && (
-            <DrawLayer key={JSON.stringify(cur)} initial={sheet.drawing} onChange={(png) => commit({ ...getSheet(book, cur), drawing: png })} />
+          <SheetCanvas book={shown} refKey={cur} pxPerMm={6} onRects={setRects} className="stage-canvas" />
+          {tool === "layout" && editable && hasImage && imgR && gripPos && (
+            <>
+              <div className="img-frame" style={{ left: `${imgR.x * 100}%`, top: `${imgR.y * 100}%`, width: `${imgR.w * 100}%`, height: `${imgR.h * 100}%` }} />
+              <span
+                className={`grip img-grip ${sheet.imageLayout}`}
+                style={{ left: `${gripPos.left * 100}%`, top: `${gripPos.top * 100}%` }}
+                onPointerDown={onImgDown}
+                onPointerMove={onImgMove}
+                onPointerUp={onImgUp}
+                onPointerCancel={onImgUp}
+                title="ひっぱって 絵の大きさを かえる"
+              />
+            </>
           )}
-          {tool !== "draw" && editable && rects.map((r) => {
+          {editable && rects.map((r) => {
             const t = sheet.texts.find((x) => x.id === r.id);
             if (!t) return null;
             const on = selected === r.id;
@@ -175,25 +238,27 @@ export default function SheetEditor({ book, update, onNext }: { book: Book; upda
             {(cur.kind === "page" || cur.kind === "cover") && (
               <button className={`tab ${tool === "fix" ? "on" : ""}`} onClick={() => setTool("fix")}>🪄 AIになおしてもらう</button>
             )}
-            <button className={`tab ${tool === "layout" ? "on" : ""}`} onClick={() => setTool("layout")}>🖼 ならべかた</button>
-            <button className={`tab ${tool === "text" ? "on" : ""}`} onClick={() => setTool("text")}>✏️ もじ</button>
-            <button className={`tab ${tool === "draw" ? "on" : ""}`} onClick={() => { setTool("draw"); setSelected(null); }}>🖍 おえかき</button>
+            <button className={`tab ${tool === "layout" ? "on" : ""}`} onClick={() => { setTool("layout"); setSelected(null); }}>🖼 絵の大きさ・ならべかた</button>
+            <button className={`tab ${tool === "text" ? "on" : ""}`} onClick={openText}>✏️ 文字の大きさ・いろ</button>
           </div>
           <div className="panel">
             {tool === "fix" && <FixPanel book={book} cur={cur} update={update} />}
             {tool === "layout" && (
-              <LayoutPanel sheet={sheet} hasImage={Boolean(sheetImage(book, cur))} onChange={commit} />
+              <LayoutPanel
+                sheet={sheet} hasImage={Boolean(sheetImage(book, cur))} onChange={commit} onLive={setDraft}
+                onAll={cur.kind === "page" && book.pages.length > 1 ? () => imageSizeAll(sheet.imageLayout, imageSizeOf(sheet)) : undefined}
+              />
             )}
             {tool === "text" && (
               <TextPanel
                 book={book} cur={cur} sheet={sheet} box={selBox} update={update}
                 onPatch={(p) => selBox && patchBox(selBox.id, p)}
+                onLive={(p) => selBox && setDraft({ ...sheet, texts: sheet.texts.map((t) => (t.id === selBox.id ? { ...t, ...p } : t)) })}
+                onAll={cur.kind === "page" && selBox?.role === "body" && book.pages.length > 1 ? () => sizeAllBodies(selBox.size) : undefined}
                 onAdd={() => { const nb = newFreeBox(); commit({ ...sheet, texts: [...sheet.texts, nb] }); setSelected(nb.id); }}
                 onRemove={() => { if (!selBox) return; commit({ ...sheet, texts: sheet.texts.filter((t) => t.id !== selBox.id) }); setSelected(null); }}
               />
             )}
-            {tool === "draw" && <p className="hint">ページの上を 指やペンで なぞってください。</p>}
-            {tool === "draw" && <div id="drawtools-slot" />}
           </div>
         </>
       ) : (
@@ -218,9 +283,30 @@ function LayoutIcon({ id }: { id: ImageLayout }) {
   );
 }
 
-function LayoutPanel({ sheet, hasImage, onChange }: { sheet: Sheet; hasImage: boolean; onChange: (s: Sheet) => void }) {
+function LayoutPanel({ sheet, hasImage, onChange, onLive, onAll }: {
+  sheet: Sheet; hasImage: boolean; onChange: (s: Sheet) => void; onLive: (s: Sheet) => void; onAll?: () => void;
+}) {
+  const size = imageSizeOf(sheet);
+  const pct = Math.round(size * 100);
+  const step = 0.05;
   return (
     <div className="panel-body">
+      {hasImage && sheet.imageLayout !== "none" && (
+        <>
+          <span className="label">絵の 大きさ <b className="size-now">{pct}%</b></span>
+          <div className="sizer">
+            <button className="btn big sizer-btn" disabled={size <= IMAGE_SIZE_MIN} onClick={() => onChange(applyImageSize(sheet, size - step, true))} aria-label="絵を ちいさく">−</button>
+            <SizeSlider
+              min={IMAGE_SIZE_MIN} max={IMAGE_SIZE_MAX} step={0.01} value={size}
+              onLive={(v) => onLive(applyImageSize(sheet, v, true))} onCommit={(v) => onChange(applyImageSize(sheet, v, true))}
+              label="絵の大きさ"
+            />
+            <button className="btn big sizer-btn" disabled={size >= IMAGE_SIZE_MAX} onClick={() => onChange(applyImageSize(sheet, size + step, true))} aria-label="絵を おおきく">+</button>
+          </div>
+          <p className="hint">ページの上の 絵の はしにある <span className="grip-mark" /> を ゆびで ひっぱっても かえられます。</p>
+          {onAll && <button className="btn" onClick={onAll}>ほかのページの 絵も この大きさに そろえる</button>}
+        </>
+      )}
       {hasImage && (
         <>
           <span className="label">絵の ならべかた</span>
@@ -248,9 +334,10 @@ function LayoutPanel({ sheet, hasImage, onChange }: { sheet: Sheet; hasImage: bo
 /* ---------- もじ ---------- */
 function TextPanel(props: {
   book: Book; cur: SheetRef; sheet: Sheet; box: TextBox | null; update: Update;
-  onPatch: (p: Partial<TextBox>) => void; onAdd: () => void; onRemove: () => void;
+  onPatch: (p: Partial<TextBox>) => void; onLive: (p: Partial<TextBox>) => void; onAll?: () => void;
+  onAdd: () => void; onRemove: () => void;
 }) {
-  const { book, cur, box, update, onPatch } = props;
+  const { book, cur, box, update, onPatch, onLive } = props;
   const { supported, listening, toggle } = useSpeech((t) => box && setText(resolveText(book, cur, box) + t));
 
   function setText(v: string) {
@@ -278,9 +365,17 @@ function TextPanel(props: {
             <textarea className="input" rows={2} value={resolveText(book, cur, box)} onChange={(e) => setText(e.target.value)} />
             {supported && <button className={`btn mic ${listening ? "on" : ""}`} onClick={toggle}>{listening ? "■ とめる" : "🎤 話す"}</button>}
           </span>
+          <span className="label">文字の 大きさ <span className="size-sample" style={{ fontSize: `${Math.round(box.size * 4)}px` }}>あ</span></span>
+          <div className="sizer">
+            <button className="btn big sizer-btn" disabled={box.size <= TEXT_MIN} onClick={() => onPatch({ size: Math.max(TEXT_MIN, +(box.size - 0.5).toFixed(2)) })} aria-label="文字を ちいさく">−</button>
+            <SizeSlider
+              min={TEXT_MIN} max={TEXT_MAX} step={0.25} value={box.size}
+              onLive={(v) => onLive({ size: v })} onCommit={(v) => onPatch({ size: v })} label="文字の大きさ"
+            />
+            <button className="btn big sizer-btn" disabled={box.size >= TEXT_MAX} onClick={() => onPatch({ size: Math.min(TEXT_MAX, +(box.size + 0.5).toFixed(2)) })} aria-label="文字を おおきく">+</button>
+          </div>
+          {props.onAll && <button className="btn" onClick={props.onAll}>ほかのページの 文章も この大きさに そろえる</button>}
           <div className="row wrap">
-            <button className="btn big" onClick={() => onPatch({ size: Math.max(3, box.size - 0.75) })}>ちいさく</button>
-            <button className="btn big" onClick={() => onPatch({ size: Math.min(22, box.size + 0.75) })}>おおきく</button>
             <button className={`btn big ${box.vertical ? "pressed" : ""}`} onClick={() => onPatch({ vertical: !box.vertical, len: box.vertical ? 0.6 : 0.6 })}>
               {box.vertical ? "よこ書きに する" : "たて書きに する"}
             </button>
@@ -394,174 +489,22 @@ function FixPanel({ book, cur, update }: { book: Book; cur: SheetRef; update: Up
   );
 }
 
-/* ---------- おえかき ---------- */
-const PEN_COLORS = ["#3d3027", "#ffffff", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#f06292", "#8d6e63"];
-const STAMPS = ["❤️", "⭐", "🌸", "🌈", "☀️", "🌙", "🐟", "🍙", "🎈", "🐶", "🐱", "🍀"];
-const WIDTHS = [{ v: 8, l: "ほそい" }, { v: 18, l: "ふつう" }, { v: 36, l: "ふとい" }];
-
-function DrawLayer({ initial, onChange }: { initial?: string; onChange: (png: string | undefined) => void }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const [color, setColor] = useState(PEN_COLORS[2]);
-  const [width, setWidth] = useState(18);
-  const [mode, setMode] = useState<"pen" | "eraser" | "stamp">("pen");
-  const [stamp, setStamp] = useState(STAMPS[0]);
-  const [stampSize, setStampSize] = useState(120);
-  const history = useRef<string[]>([]);
-  const last = useRef<{ x: number; y: number } | null>(null);
-  const [histLen, setHistLen] = useState(0);
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- どうぐを置く場所(下のパネル)を探す
-    setSlot(document.getElementById("drawtools-slot"));
-  }, []);
-
-  useEffect(() => {
-    const c = canvas.current!;
-    const ctx = c.getContext("2d")!;
-    ctx.clearRect(0, 0, c.width, c.height);
-    if (initial) {
-      const img = new Image();
-      img.onload = () => ctx.drawImage(img, 0, 0, c.width, c.height);
-      img.src = initial;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 開いたときだけ読みこむ
-  }, []);
-
-  const pos = (e: React.PointerEvent) => {
-    const r = canvas.current!.getBoundingClientRect();
-    return { x: ((e.clientX - r.left) / r.width) * DRAW_W, y: ((e.clientY - r.top) / r.height) * DRAW_H };
+/* ---------- 大きさの つまみ ---------- */
+/** うごかしている間は 見本だけ かえ(onLive)、指をはなしたら 保存する(onCommit) */
+function SizeSlider({ min, max, step, value, onLive, onCommit, label }: {
+  min: number; max: number; step: number; value: number; label: string;
+  onLive: (v: number) => void; onCommit: (v: number) => void;
+}) {
+  const [v, setV] = useState<number | null>(null);
+  const done = () => {
+    if (v !== null) onCommit(v);
+    setV(null);
   };
-  const save = () => {
-    const c = canvas.current!;
-    onChange(c.toDataURL("image/png"));
-  };
-  const remember = () => {
-    history.current.push(canvas.current!.toDataURL("image/png"));
-    if (history.current.length > 20) history.current.shift();
-    setHistLen(history.current.length);
-  };
-
-  const down = (e: React.PointerEvent) => {
-    e.preventDefault();
-    remember();
-    const ctx = canvas.current!.getContext("2d")!;
-    const p = pos(e);
-    if (mode === "stamp") {
-      ctx.globalCompositeOperation = "source-over";
-      ctx.font = `${stampSize}px "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(stamp, p.x, p.y);
-      save();
-      return;
-    }
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    last.current = p;
-    ctx.globalCompositeOperation = mode === "eraser" ? "destination-out" : "source-over";
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, (mode === "eraser" ? width * 2 : width) / 2, 0, Math.PI * 2);
-    ctx.fill();
-  };
-  const move = (e: React.PointerEvent) => {
-    if (!last.current) return;
-    const ctx = canvas.current!.getContext("2d")!;
-    const p = pos(e);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = mode === "eraser" ? width * 2 : width;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(last.current.x, last.current.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
-    last.current = p;
-  };
-  const up = () => {
-    if (!last.current) return;
-    last.current = null;
-    save();
-  };
-  const undo = () => {
-    const prev = history.current.pop();
-    if (prev === undefined) return;
-    const c = canvas.current!;
-    const ctx = c.getContext("2d")!;
-    const img = new Image();
-    img.onload = () => {
-      ctx.globalCompositeOperation = "source-over";
-      ctx.clearRect(0, 0, c.width, c.height);
-      ctx.drawImage(img, 0, 0);
-      save();
-    };
-    img.src = prev;
-    setHistLen(history.current.length);
-  };
-  const clear = () => {
-    if (!confirm("かいた絵を ぜんぶ けしますか?")) return;
-    remember();
-    const c = canvas.current!;
-    c.getContext("2d")!.clearRect(0, 0, c.width, c.height);
-    onChange(undefined);
-  };
-
-  // 手描きの層は塗り足しまでの大きさ。画面では仕上がりの外にはみ出す分を隠す
-  const bx = (BLEED_MM / TRIM_W_MM) * 100;
-  const by = (BLEED_MM / TRIM_H_MM) * 100;
   return (
-    <>
-      <canvas
-        ref={canvas}
-        width={DRAW_W}
-        height={DRAW_H}
-        className="draw-canvas"
-        style={{ left: `-${bx}%`, top: `-${by}%`, width: `${(PAGE_W_MM / TRIM_W_MM) * 100}%`, height: `${(PAGE_H_MM / TRIM_H_MM) * 100}%` }}
-        onPointerDown={down}
-        onPointerMove={move}
-        onPointerUp={up}
-        onPointerCancel={up}
-      />
-      {slot && createPortal(<div className="drawtools">
-        <div className="row wrap">
-          <button className={`btn big ${mode === "pen" ? "pressed" : ""}`} onClick={() => setMode("pen")}>🖍 ペン</button>
-          <button className={`btn big ${mode === "stamp" ? "pressed" : ""}`} onClick={() => setMode("stamp")}>⭐ スタンプ</button>
-          <button className={`btn big ${mode === "eraser" ? "pressed" : ""}`} onClick={() => setMode("eraser")}>🧽 けしゴム</button>
-          <button className="btn big" disabled={histLen === 0} onClick={undo}>↩ ひとつ もどす</button>
-          <button className="btn big ghost" onClick={clear}>ぜんぶ けす</button>
-        </div>
-        {mode !== "stamp" ? (
-          <>
-            {mode === "pen" && (
-              <div className="swatches">
-                {PEN_COLORS.map((c) => (
-                  <button key={c} className={`swatch ${color === c ? "on" : ""}`} style={{ background: c }} onClick={() => setColor(c)} aria-label={c} />
-                ))}
-              </div>
-            )}
-            <div className="choices">
-              {WIDTHS.map((w) => (
-                <button key={w.v} className={`choice ${width === w.v ? "on" : ""}`} onClick={() => setWidth(w.v)}>
-                  <span className="dot" style={{ width: w.v / 2 + 4, height: w.v / 2 + 4 }} />{w.l}
-                </button>
-              ))}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="stamps">
-              {STAMPS.map((s) => (
-                <button key={s} className={`stamp ${stamp === s ? "on" : ""}`} onClick={() => setStamp(s)}>{s}</button>
-              ))}
-            </div>
-            <div className="choices">
-              {[{ v: 70, l: "ちいさい" }, { v: 120, l: "ふつう" }, { v: 220, l: "おおきい" }].map((w) => (
-                <button key={w.v} className={`choice ${stampSize === w.v ? "on" : ""}`} onClick={() => setStampSize(w.v)}>{w.l}</button>
-              ))}
-            </div>
-            <p className="hint">ページの 好きなところを タップすると スタンプが おせます。</p>
-          </>
-        )}
-      </div>, slot)}
-    </>
+    <input
+      type="range" className="size-slider" min={min} max={max} step={step} value={v ?? value} aria-label={label}
+      onChange={(e) => { const n = Number(e.target.value); setV(n); onLive(n); }}
+      onPointerUp={done} onKeyUp={done} onBlur={done} onTouchEnd={done}
+    />
   );
 }
